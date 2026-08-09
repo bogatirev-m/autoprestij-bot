@@ -1,5 +1,7 @@
 import re
 import sqlite3
+import threading
+from datetime import datetime
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
@@ -7,7 +9,6 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ===================== НАСТРОЙКИ =====================
 TOKEN = "8972845479:AAFkpr9Bc0K2UBA8x3hZmobPlKLUK-4PKtA"
 ADMIN_IDS = [8621244180,740869889,8983954588]
-
 # ===================== БАЗА ДАННЫХ =====================
 def init_db():
     conn = sqlite3.connect("autoservice.db")
@@ -556,7 +557,24 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ===================== ЗАПУСК =====================
+import threading
+from flask import Flask
+
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    flask_app.run(host='0.0.0.0', port=10000)
+
 def main():
+    # Запускаем Flask в отдельном потоке
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Запускаем бота
     app = Application.builder().token(TOKEN).build()
 
     # Основные команды
