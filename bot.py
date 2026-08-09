@@ -9,6 +9,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ===================== НАСТРОЙКИ =====================
 TOKEN = "8972845479:AAFkpr9Bc0K2UBA8x3hZmobPlKLUK-4PKtA"
 ADMIN_IDS = [8621244180,740869889,8983954588]
+
 # ===================== БАЗА ДАННЫХ =====================
 def init_db():
     conn = sqlite3.connect("autoservice.db")
@@ -459,20 +460,41 @@ async def add_service_mileage(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     return ADDING_SERVICE_DETAILS
 
-async def add_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def async def add_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
         await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
 
+    # Словарь перевода русских ключей в английские
+    keys_map = {
+        'масло': 'oil_type',
+        'объём_масла': 'oil_volume',
+        'масляный_фильтр': 'oil_filter',
+        'воздушный_фильтр': 'air_filter',
+        'салонный_фильтр': 'cabin_filter',
+        'топливный_фильтр': 'fuel_filter',
+        'колодки_перед': 'brake_pads_front',
+        'колодки_зад': 'brake_pads_rear',
+        'диски_перед': 'brake_discs_front',
+        'диски_зад': 'brake_discs_rear',
+        'тормозная_жидкость': 'brake_fluid',
+        'антифриз': 'coolant',
+        'масло_кпп': 'transmission_oil',
+        'свечи': 'spark_plugs',
+        'ремень_грм': 'timing_belt',
+        'приводной_ремень': 'drive_belt',
+        'акб': 'battery',
+        'подвеска': 'suspension_work',
+        'рулевое': 'steering_work',
+        'выхлоп': 'exhaust_work',
+        'диагностика': 'diagnosis',
+        'прочее': 'other_work',
+        'сумма': 'total_amount',
+        'мастер': 'master',
+        'заметки': 'notes',
+    }
+
     fields = {}
-    allowed_keys = [
-        'oil_type', 'oil_volume', 'oil_filter', 'air_filter', 'cabin_filter',
-        'fuel_filter', 'brake_pads_front', 'brake_pads_rear', 'brake_discs_front',
-        'brake_discs_rear', 'brake_fluid', 'coolant', 'transmission_oil',
-        'spark_plugs', 'timing_belt', 'drive_belt', 'battery', 'suspension_work',
-        'steering_work', 'exhaust_work', 'diagnosis', 'other_work',
-        'total_amount', 'master', 'notes'
-    ]
 
     for line in update.message.text.strip().split('\n'):
         line = line.strip()
@@ -480,14 +502,18 @@ async def add_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE
             key, value = line.split('=', 1)
             key = key.strip().lower()
             value = value.strip()
-            if key in allowed_keys:
-                if key == 'total_amount':
-                    try:
-                        fields[key] = float(value)
-                    except ValueError:
-                        fields[key] = 0
-                else:
-                    fields[key] = value
+            
+            # Переводим русский ключ в английский
+            if key in keys_map:
+                key = keys_map[key]
+            
+            if key == 'total_amount':
+                try:
+                    fields[key] = float(value)
+                except ValueError:
+                    fields[key] = 0
+            else:
+                fields[key] = value
 
     conn = sqlite3.connect("autoservice.db")
     cur = conn.cursor()
@@ -616,8 +642,37 @@ def main():
         states={
             SELECTING_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_car)],
             ADDING_SERVICE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_service_date)],
-            ADDING_SERVICE_MILEAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_service_mileage)],
-            ADDING_SERVICE_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_service_details)],
+            ADDING_SERVICE_MILEAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, async def add_service_mileage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        return ConversationHandler.END
+    try:
+        mileage = int(update.message.text.strip().replace(" ", ""))
+    except ValueError:
+        await update.message.reply_text("❌ Введите число (пробег в км):")
+        return ADDING_SERVICE_MILEAGE
+    context.user_data['service_mileage'] = mileage
+    await update.message.reply_text(
+        "Теперь введите данные обслуживания в формате <b>Ключ=Значение</b> (каждый с новой строки):\n\n"
+        "<code>масло=Castrol 5W-30\n"
+        "объём_масла=4.2л\n"
+        "масляный_фильтр=Да\n"
+        "воздушный_фильтр=Да\n"
+        "салонный_фильтр=Да\n"
+        "мастер=Иванов\n"
+        "сумма=12500\n"
+        "заметки=Рекомендация: замена ГРМ через 10 000 км</code>\n\n"
+        "<b>Доступные ключи:</b>\n"
+        "масло, объём_масла, масляный_фильтр, воздушный_фильтр, салонный_фильтр, топливный_фильтр\n"
+        "колодки_перед, колодки_зад, диски_перед, диски_зад\n"
+        "тормозная_жидкость, антифриз, масло_кпп, свечи\n"
+        "ремень_грм, приводной_ремень, акб\n"
+        "подвеска, рулевое, выхлоп, диагностика, прочее\n"
+        "сумма, мастер, заметки\n\n"
+        "Можно указать только нужные поля.",
+        parse_mode="HTML"
+    )
+    return ADDING_SERVICE_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_service_details)],
         },
         fallbacks=[MessageHandler(filters.Regex("^❌ Отмена$"), cancel)],
     )
