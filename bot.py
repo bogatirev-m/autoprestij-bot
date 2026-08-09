@@ -2,14 +2,13 @@ import re
 import sqlite3
 import threading
 from datetime import datetime
-from datetime import datetime
+
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
 # ===================== НАСТРОЙКИ =====================
 TOKEN = "8972845479:AAFkpr9Bc0K2UBA8x3hZmobPlKLUK-4PKtA"
 ADMIN_IDS = [8621244180,740869889,8983954588]
-
 # ===================== БАЗА ДАННЫХ =====================
 def init_db():
     conn = sqlite3.connect("autoservice.db")
@@ -445,27 +444,32 @@ async def add_service_mileage(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ADDING_SERVICE_MILEAGE
     context.user_data['service_mileage'] = mileage
     await update.message.reply_text(
-        "Теперь введите данные обслуживания <b>одним сообщением</b> "
-        "в формате Ключ=Значение (каждый с новой строки):\n\n"
-        "<code>oil_type=Castrol 5W-30\n"
-        "oil_volume=4.2л\n"
-        "oil_filter=Да\n"
-        "air_filter=Да\n"
-        "cabin_filter=Да\n"
-        "master=Иванов\n"
-        "total_amount=12500\n"
-        "notes=Рекомендация: замена ГРМ через 10 000 км</code>\n\n"
+        "Теперь введите данные обслуживания в формате <b>Ключ=Значение</b> (каждый с новой строки):\n\n"
+        "<code>масло=Castrol 5W-30\n"
+        "объём_масла=4.2л\n"
+        "масляный_фильтр=Да\n"
+        "воздушный_фильтр=Да\n"
+        "салонный_фильтр=Да\n"
+        "мастер=Иванов\n"
+        "сумма=12500\n"
+        "заметки=Рекомендация: замена ГРМ через 10 000 км</code>\n\n"
+        "<b>Доступные ключи:</b>\n"
+        "масло, объём_масла, масляный_фильтр, воздушный_фильтр, салонный_фильтр, топливный_фильтр\n"
+        "колодки_перед, колодки_зад, диски_перед, диски_зад\n"
+        "тормозная_жидкость, антифриз, масло_кпп, свечи\n"
+        "ремень_грм, приводной_ремень, акб\n"
+        "подвеска, рулевое, выхлоп, диагностика, прочее\n"
+        "сумма, мастер, заметки\n\n"
         "Можно указать только нужные поля.",
         parse_mode="HTML"
     )
     return ADDING_SERVICE_DETAILS
 
-async def async def add_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def add_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
         await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
 
-    # Словарь перевода русских ключей в английские
     keys_map = {
         'масло': 'oil_type',
         'объём_масла': 'oil_volume',
@@ -503,7 +507,6 @@ async def async def add_service_details(update: Update, context: ContextTypes.DE
             key = key.strip().lower()
             value = value.strip()
             
-            # Переводим русский ключ в английский
             if key in keys_map:
                 key = keys_map[key]
             
@@ -583,7 +586,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ===================== ЗАПУСК =====================
-import threading
 from flask import Flask
 
 flask_app = Flask(__name__)
@@ -596,18 +598,14 @@ def run_flask():
     flask_app.run(host='0.0.0.0', port=10000)
 
 def main():
-    # Запускаем Flask в отдельном потоке
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    
-    # Запускаем бота
+
     app = Application.builder().token(TOKEN).build()
 
-    # Основные команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_cmd))
 
-    # Запрос истории
     query_handler = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex("^🔍 Запросить историю$"), request_query),
@@ -620,7 +618,6 @@ def main():
     )
     app.add_handler(query_handler)
 
-    # Добавление авто
     add_car_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^➕ Добавить автомобиль$"), add_car_start)],
         states={
@@ -636,49 +633,18 @@ def main():
     )
     app.add_handler(add_car_handler)
 
-    # Добавление обслуживания
     add_service_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🔧 Добавить обслуживание$"), add_service_start)],
         states={
             SELECTING_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_car)],
             ADDING_SERVICE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_service_date)],
-            ADDING_SERVICE_MILEAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, async def add_service_mileage(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text == "❌ Отмена":
-        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
-        return ConversationHandler.END
-    try:
-        mileage = int(update.message.text.strip().replace(" ", ""))
-    except ValueError:
-        await update.message.reply_text("❌ Введите число (пробег в км):")
-        return ADDING_SERVICE_MILEAGE
-    context.user_data['service_mileage'] = mileage
-    await update.message.reply_text(
-        "Теперь введите данные обслуживания в формате <b>Ключ=Значение</b> (каждый с новой строки):\n\n"
-        "<code>масло=Castrol 5W-30\n"
-        "объём_масла=4.2л\n"
-        "масляный_фильтр=Да\n"
-        "воздушный_фильтр=Да\n"
-        "салонный_фильтр=Да\n"
-        "мастер=Иванов\n"
-        "сумма=12500\n"
-        "заметки=Рекомендация: замена ГРМ через 10 000 км</code>\n\n"
-        "<b>Доступные ключи:</b>\n"
-        "масло, объём_масла, масляный_фильтр, воздушный_фильтр, салонный_фильтр, топливный_фильтр\n"
-        "колодки_перед, колодки_зад, диски_перед, диски_зад\n"
-        "тормозная_жидкость, антифриз, масло_кпп, свечи\n"
-        "ремень_грм, приводной_ремень, акб\n"
-        "подвеска, рулевое, выхлоп, диагностика, прочее\n"
-        "сумма, мастер, заметки\n\n"
-        "Можно указать только нужные поля.",
-        parse_mode="HTML"
-    )
-    return ADDING_SERVICE_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_service_details)],
+            ADDING_SERVICE_MILEAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_service_mileage)],
+            ADDING_SERVICE_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_service_details)],
         },
         fallbacks=[MessageHandler(filters.Regex("^❌ Отмена$"), cancel)],
     )
     app.add_handler(add_service_handler)
 
-    # Кнопки меню
     app.add_handler(MessageHandler(filters.Regex("^📋 Все автомобили$"), list_cars))
     app.add_handler(MessageHandler(filters.Regex("^ℹ️ О сервисе$"), about))
     app.add_handler(MessageHandler(filters.Regex("^📞 Контакты$"), contacts))
