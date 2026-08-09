@@ -1,15 +1,8 @@
-import asyncio
 import re
 import sqlite3
 from datetime import datetime
-
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import (Message, ReplyKeyboardMarkup, KeyboardButton,
-                           ReplyKeyboardRemove)
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
 # ===================== НАСТРОЙКИ =====================
 TOKEN = "8972845479:AAFkpr9Bc0K2UBA8x3hZmobPlKLUK-4PKtA"
@@ -72,55 +65,29 @@ def init_db():
 
 init_db()
 
-# ===================== СОСТОЯНИЯ FSM =====================
-class ClientStates(StatesGroup):
-    waiting_query = State()
-
-class AdminStates(StatesGroup):
-    choosing_action = State()
-    adding_car_vin = State()
-    adding_car_plate = State()
-    adding_car_brand = State()
-    adding_car_model = State()
-    adding_car_year = State()
-    adding_car_client_name = State()
-    adding_car_client_phone = State()
-    selecting_car_for_service = State()
-    adding_service_date = State()
-    adding_service_mileage = State()
-    adding_service_details = State()
-
 # ===================== КЛАВИАТУРЫ =====================
-main_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="🔍 Запросить историю")],
-        [KeyboardButton(text="ℹ️ О сервисе"), KeyboardButton(text="📞 Контакты")]
-    ],
-    resize_keyboard=True
-)
+main_kb = ReplyKeyboardMarkup([
+    [KeyboardButton("🔍 Запросить историю")],
+    [KeyboardButton("ℹ️ О сервисе"), KeyboardButton("📞 Контакты")]
+], resize_keyboard=True)
 
-admin_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="➕ Добавить автомобиль")],
-        [KeyboardButton(text="🔧 Добавить обслуживание")],
-        [KeyboardButton(text="📋 Все автомобили")],
-        [KeyboardButton(text="🔍 Найти авто (админ)")],
-        [KeyboardButton(text="❌ Выйти из админки")]
-    ],
-    resize_keyboard=True
-)
+admin_kb = ReplyKeyboardMarkup([
+    [KeyboardButton("➕ Добавить автомобиль")],
+    [KeyboardButton("🔧 Добавить обслуживание")],
+    [KeyboardButton("📋 Все автомобили")],
+    [KeyboardButton("🔍 Найти авто (админ)")],
+    [KeyboardButton("❌ Выйти из админки")]
+], resize_keyboard=True)
 
-cancel_kb = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text="❌ Отмена")]],
-    resize_keyboard=True
-)
+cancel_kb = ReplyKeyboardMarkup([
+    [KeyboardButton("❌ Отмена")]
+], resize_keyboard=True)
 
-# ===================== БОТ И РОУТЕР =====================
-bot = Bot(token=TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
-router = Router()
-dp.include_router(router)
+# ===================== СОСТОЯНИЯ =====================
+(WAITING_QUERY, ADDING_CAR_VIN, ADDING_CAR_PLATE, ADDING_CAR_BRAND, 
+ ADDING_CAR_MODEL, ADDING_CAR_YEAR, ADDING_CAR_CLIENT_NAME, 
+ ADDING_CAR_CLIENT_PHONE, SELECTING_CAR, ADDING_SERVICE_DATE, 
+ ADDING_SERVICE_MILEAGE, ADDING_SERVICE_DETAILS) = range(12)
 
 # ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
 def is_admin(user_id: int) -> bool:
@@ -135,6 +102,35 @@ def detect_plate_country(plate: str) -> str:
     if re.match(r'^\d{2}[A-Z]{2}\d{3}$', plate_clean):
         return "Армения"
     return "Неизвестно"
+
+def search_car(query: str) -> dict | None:
+    conn = sqlite3.connect("autoservice.db")
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    query_clean = re.sub(r'\s+', '', query.upper())
+    cur.execute("SELECT * FROM cars WHERE UPPER(REPLACE(vin, ' ', '')) = ? OR UPPER(REPLACE(plate, ' ', '')) = ?",
+                (query_clean, query_clean))
+    car = cur.fetchone()
+    conn.close()
+    return dict(car) if car else None
+
+def get_services(car_id: int) -> list:
+    conn = sqlite3.connect("autoservice.db")
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM services WHERE car_id = ? ORDER BY date DESC", (car_id,))
+    services = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    return services
+
+def get_all_cars() -> list:
+    conn = sqlite3.connect("autoservice.db")
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM cars ORDER BY id DESC LIMIT 20")
+    cars = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    return cars
 
 def format_services(services: list) -> str:
     if not services:
@@ -184,65 +180,29 @@ def format_services(services: list) -> str:
 
     return result
 
-def search_car(query: str) -> dict | None:
-    conn = sqlite3.connect("autoservice.db")
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    query_clean = re.sub(r'\s+', '', query.upper())
-    cur.execute("SELECT * FROM cars WHERE UPPER(REPLACE(vin, ' ', '')) = ? OR UPPER(REPLACE(plate, ' ', '')) = ?",
-                (query_clean, query_clean))
-    car = cur.fetchone()
-    conn.close()
-    return dict(car) if car else None
-
-def get_services(car_id: int) -> list:
-    conn = sqlite3.connect("autoservice.db")
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM services WHERE car_id = ? ORDER BY date DESC", (car_id,))
-    services = [dict(row) for row in cur.fetchall()]
-    conn.close()
-    return services
-
-def get_all_cars() -> list:
-    conn = sqlite3.connect("autoservice.db")
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM cars ORDER BY id DESC LIMIT 20")
-    cars = [dict(row) for row in cur.fetchall()]
-    conn.close()
-    return cars
-
 # ===================== КОМАНДЫ =====================
-@router.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
-    if is_admin(message.from_user.id):
-        await message.answer(
-            "👋 Добро пожаловать, администратор!\n\n"
-            "Выберите действие в меню:",
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_admin(update.effective_user.id):
+        await update.message.reply_text(
+            "👋 Добро пожаловать, администратор!\n\nВыберите действие в меню:",
             reply_markup=admin_kb
         )
     else:
-        await message.answer(
+        await update.message.reply_text(
             "👋 Добро пожаловать в автосервис!\n\n"
             "Нажмите кнопку ниже, чтобы запросить историю обслуживания вашего автомобиля.",
             reply_markup=main_kb
         )
 
-@router.message(Command("admin"))
-async def cmd_admin(message: Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("⛔ У вас нет доступа к админ-панели.")
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ У вас нет доступа к админ-панели.")
         return
-    await message.answer("🔐 Админ-панель активна.\nВыберите действие:", reply_markup=admin_kb)
+    await update.message.reply_text("🔐 Админ-панель активна.\nВыберите действие:", reply_markup=admin_kb)
 
 # ===================== ЗАПРОС ИСТОРИИ =====================
-@router.message(F.text == "🔍 Запросить историю")
-@router.message(F.text == "🔍 Найти авто (админ)")
-async def request_query(message: Message, state: FSMContext):
-    await state.set_state(ClientStates.waiting_query)
-    await message.answer(
+async def request_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
         "Введите VIN-номер (17 символов) или госномер автомобиля:\n\n"
         "<i>Примеры:\n"
         "• РФ: А123БВ177 или А123БВ 177\n"
@@ -251,26 +211,21 @@ async def request_query(message: Message, state: FSMContext):
         reply_markup=cancel_kb,
         parse_mode="HTML"
     )
+    return WAITING_QUERY
 
-@router.message(ClientStates.waiting_query)
-async def process_query(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.clear()
-        kb = admin_kb if is_admin(message.from_user.id) else main_kb
-        await message.answer("❌ Запрос отменён.", reply_markup=kb)
-        return
+async def process_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        kb = admin_kb if is_admin(update.effective_user.id) else main_kb
+        await update.message.reply_text("❌ Запрос отменён.", reply_markup=kb)
+        return ConversationHandler.END
 
-    query = message.text.strip()
-    car = search_car(query)
-
+    car = search_car(update.message.text.strip())
     if not car:
-        await message.answer(
-            "❌ Автомобиль не найден.\n"
-            "Проверьте VIN или госномер и попробуйте снова.\n\n"
-            "Если автомобиль обслуживался у нас, обратитесь к администратору.",
+        await update.message.reply_text(
+            "❌ Автомобиль не найден.\nПроверьте VIN или госномер и попробуйте снова.",
             reply_markup=cancel_kb
         )
-        return
+        return WAITING_QUERY
 
     services = get_services(car['id'])
     plate_str = f"{car['plate']} ({car['plate_country']})" if car['plate'] else "не указан"
@@ -284,240 +239,210 @@ async def process_query(message: Message, state: FSMContext):
         f"📅 Год: <b>{car['year'] or '—'}</b>\n"
     )
 
-    if is_admin(message.from_user.id):
+    if is_admin(update.effective_user.id):
         car_info += f"👤 Клиент: <b>{car['client_name'] or '—'}</b>\n"
         car_info += f"📞 Телефон: <b>{car['client_phone'] or '—'}</b>\n"
 
     car_info += f"\n{'─' * 30}\n\n"
     car_info += format_services(services)
 
-    kb = admin_kb if is_admin(message.from_user.id) else main_kb
-    if len(car_info) > 4000:
-        parts = [car_info[i:i+4000] for i in range(0, len(car_info), 4000)]
-        for i, part in enumerate(parts):
-            if i == 0:
-                await message.answer(part, parse_mode="HTML")
-            else:
-                await message.answer(part, parse_mode="HTML")
-        await message.answer("✅ Это вся история обслуживания.", reply_markup=kb)
-    else:
-        await message.answer(car_info, parse_mode="HTML", reply_markup=kb)
-
-    await state.clear()
+    kb = admin_kb if is_admin(update.effective_user.id) else main_kb
+    await update.message.reply_text(car_info, parse_mode="HTML", reply_markup=kb)
+    return ConversationHandler.END
 
 # ===================== АДМИН: ДОБАВЛЕНИЕ АВТО =====================
-@router.message(F.text == "➕ Добавить автомобиль")
-async def add_car_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-    await state.set_state(AdminStates.adding_car_vin)
-    await message.answer(
+async def add_car_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    await update.message.reply_text(
         "Введите VIN-номер автомобиля (17 символов):\n<i>Или нажмите ❌ Отмена</i>",
         reply_markup=cancel_kb,
         parse_mode="HTML"
     )
+    return ADDING_CAR_VIN
 
-@router.message(AdminStates.adding_car_vin)
-async def add_car_vin(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("❌ Добавление отменено.", reply_markup=admin_kb)
-        return
-    vin = re.sub(r'\s+', '', message.text.strip().upper())
+async def add_car_vin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        return ConversationHandler.END
+    vin = re.sub(r'\s+', '', update.message.text.strip().upper())
     if len(vin) != 17:
-        await message.answer("❌ VIN должен содержать ровно 17 символов. Попробуйте снова:")
-        return
-    await state.update_data(vin=vin)
-    await state.set_state(AdminStates.adding_car_plate)
-    await message.answer(
+        await update.message.reply_text("❌ VIN должен содержать ровно 17 символов. Попробуйте снова:")
+        return ADDING_CAR_VIN
+    context.user_data['vin'] = vin
+    await update.message.reply_text(
         "Введите госномер автомобиля:\n<i>Форматы: А123БВ177, 01KG123ABC, 12AB123</i>",
         parse_mode="HTML"
     )
+    return ADDING_CAR_PLATE
 
-@router.message(AdminStates.adding_car_plate)
-async def add_car_plate(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("❌ Добавление отменено.", reply_markup=admin_kb)
-        return
-    plate = message.text.strip().upper()
+async def add_car_plate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        return ConversationHandler.END
+    plate = update.message.text.strip().upper()
     country = detect_plate_country(plate)
     if country == "Неизвестно":
         country = "РФ"
-    await state.update_data(plate=plate, plate_country=country)
-    await state.set_state(AdminStates.adding_car_brand)
-    await message.answer("Введите марку авто (например, Toyota, BMW):")
+    context.user_data['plate'] = plate
+    context.user_data['plate_country'] = country
+    await update.message.reply_text("Введите марку авто (например, Toyota, BMW):")
+    return ADDING_CAR_BRAND
 
-@router.message(AdminStates.adding_car_brand)
-async def add_car_brand(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("❌ Добавление отменено.", reply_markup=admin_kb)
-        return
-    await state.update_data(brand=message.text.strip())
-    await state.set_state(AdminStates.adding_car_model)
-    await message.answer("Введите модель авто (например, Camry, X5):")
+async def add_car_brand(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        return ConversationHandler.END
+    context.user_data['brand'] = update.message.text.strip()
+    await update.message.reply_text("Введите модель авто (например, Camry, X5):")
+    return ADDING_CAR_MODEL
 
-@router.message(AdminStates.adding_car_model)
-async def add_car_model(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("❌ Добавление отменено.", reply_markup=admin_kb)
-        return
-    await state.update_data(model=message.text.strip())
-    await state.set_state(AdminStates.adding_car_year)
-    await message.answer("Введите год выпуска (например, 2023):")
+async def add_car_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        return ConversationHandler.END
+    context.user_data['model'] = update.message.text.strip()
+    await update.message.reply_text("Введите год выпуска (например, 2023):")
+    return ADDING_CAR_YEAR
 
-@router.message(AdminStates.adding_car_year)
-async def add_car_year(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("❌ Добавление отменено.", reply_markup=admin_kb)
-        return
+async def add_car_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        return ConversationHandler.END
     try:
-        year = int(message.text.strip())
+        year = int(update.message.text.strip())
     except ValueError:
-        await message.answer("❌ Введите число. Попробуйте снова:")
-        return
-    await state.update_data(year=year)
-    await state.set_state(AdminStates.adding_car_client_name)
-    await message.answer("Введите имя клиента (можно оставить прочерк —):")
+        await update.message.reply_text("❌ Введите число. Попробуйте снова:")
+        return ADDING_CAR_YEAR
+    context.user_data['year'] = year
+    await update.message.reply_text("Введите имя клиента (можно —):")
+    return ADDING_CAR_CLIENT_NAME
 
-@router.message(AdminStates.adding_car_client_name)
-async def add_car_client_name(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("❌ Добавление отменено.", reply_markup=admin_kb)
-        return
-    await state.update_data(client_name=message.text.strip())
-    await state.set_state(AdminStates.adding_car_client_phone)
-    await message.answer("Введите телефон клиента (можно оставить прочерк —):")
+async def add_car_client_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        return ConversationHandler.END
+    context.user_data['client_name'] = update.message.text.strip()
+    await update.message.reply_text("Введите телефон клиента (можно —):")
+    return ADDING_CAR_CLIENT_PHONE
 
-@router.message(AdminStates.adding_car_client_phone)
-async def add_car_client_phone(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("❌ Добавление отменено.", reply_markup=admin_kb)
-        return
-    data = await state.get_data()
+async def add_car_client_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        return ConversationHandler.END
+
     conn = sqlite3.connect("autoservice.db")
     cur = conn.cursor()
     try:
         cur.execute(
             "INSERT INTO cars (vin, plate, plate_country, brand, model, year, client_name, client_phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (data['vin'], data['plate'], data['plate_country'], data['brand'], data['model'],
-             data['year'], data['client_name'], message.text.strip())
+            (context.user_data['vin'], context.user_data['plate'], context.user_data['plate_country'],
+             context.user_data['brand'], context.user_data['model'], context.user_data['year'],
+             context.user_data['client_name'], update.message.text.strip())
         )
         conn.commit()
-        await message.answer(
+        await update.message.reply_text(
             f"✅ Автомобиль добавлен!\n\n"
-            f"🚗 {data['brand']} {data['model']} ({data['year']})\n"
-            f"📌 VIN: <code>{data['vin']}</code>\n"
-            f"📋 Госномер: <b>{data['plate']}</b> ({data['plate_country']})\n"
-            f"👤 Клиент: <b>{data['client_name']}</b>\n"
-            f"📞 Телефон: <b>{message.text.strip()}</b>",
-            reply_markup=admin_kb,
-            parse_mode="HTML"
+            f"🚗 {context.user_data['brand']} {context.user_data['model']} ({context.user_data['year']})\n"
+            f"📌 VIN: {context.user_data['vin']}\n"
+            f"📋 Госномер: {context.user_data['plate']} ({context.user_data['plate_country']})\n"
+            f"👤 Клиент: {context.user_data['client_name']}\n"
+            f"📞 Телефон: {update.message.text.strip()}",
+            reply_markup=admin_kb
         )
     except sqlite3.IntegrityError:
-        await message.answer("❌ Автомобиль с таким VIN или госномером уже существует.", reply_markup=admin_kb)
+        await update.message.reply_text("❌ Автомобиль с таким VIN или госномером уже существует.", reply_markup=admin_kb)
     finally:
         conn.close()
-    await state.clear()
+    return ConversationHandler.END
 
 # ===================== АДМИН: ВСЕ АВТО =====================
-@router.message(F.text == "📋 Все автомобили")
-async def list_cars(message: Message):
-    if not is_admin(message.from_user.id):
+async def list_cars(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
         return
     cars = get_all_cars()
     if not cars:
-        await message.answer("📭 База автомобилей пуста.", reply_markup=admin_kb)
+        await update.message.reply_text("📭 База автомобилей пуста.", reply_markup=admin_kb)
         return
     text = "📋 <b>Последние автомобили в базе:</b>\n\n"
     for c in cars:
         plate_str = f"{c['plate']} ({c['plate_country']})" if c['plate'] else "—"
         text += f"🆔 {c['id']} | {c['brand']} {c['model']} | {plate_str} | {c['client_name']}\n"
-    await message.answer(text, parse_mode="HTML", reply_markup=admin_kb)
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=admin_kb)
 
 # ===================== АДМИН: ДОБАВЛЕНИЕ ОБСЛУЖИВАНИЯ =====================
-@router.message(F.text == "🔧 Добавить обслуживание")
-async def add_service_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
+async def add_service_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
     cars = get_all_cars()
     if not cars:
-        await message.answer("❌ Сначала добавьте автомобиль в базу.", reply_markup=admin_kb)
-        return
+        await update.message.reply_text("❌ Сначала добавьте автомобиль в базу.", reply_markup=admin_kb)
+        return ConversationHandler.END
     text = "Выберите автомобиль (отправьте <b>ID</b>):\n\n"
     for c in cars:
         plate_str = f"{c['plate']}" if c['plate'] else "без номера"
         text += f"🆔 {c['id']} — {c['brand']} {c['model']} | {plate_str}\n"
-    await state.set_state(AdminStates.selecting_car_for_service)
-    await message.answer(text, parse_mode="HTML", reply_markup=cancel_kb)
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=cancel_kb)
+    return SELECTING_CAR
 
-@router.message(AdminStates.selecting_car_for_service)
-async def select_car_for_service(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("❌ Добавление отменено.", reply_markup=admin_kb)
-        return
+async def select_car(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        return ConversationHandler.END
     try:
-        car_id = int(message.text.strip())
+        car_id = int(update.message.text.strip())
     except ValueError:
-        await message.answer("❌ Отправьте числовой ID автомобиля:")
-        return
+        await update.message.reply_text("❌ Отправьте числовой ID автомобиля:")
+        return SELECTING_CAR
+
     conn = sqlite3.connect("autoservice.db")
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("SELECT * FROM cars WHERE id = ?", (car_id,))
     car = cur.fetchone()
     conn.close()
+
     if not car:
-        await message.answer("❌ Автомобиль с таким ID не найден.")
-        return
+        await update.message.reply_text("❌ Автомобиль с таким ID не найден.")
+        return SELECTING_CAR
+
     car = dict(car)
-    await state.update_data(car_id=car_id, car_info=f"{car['brand']} {car['model']} ({car['plate']})")
-    await state.set_state(AdminStates.adding_service_date)
-    await message.answer(
+    context.user_data['car_id'] = car_id
+    context.user_data['car_info'] = f"{car['brand']} {car['model']} ({car['plate']})"
+    await update.message.reply_text(
         f"🚗 <b>{car['brand']} {car['model']} | {car['plate']}</b>\n\n"
         f"Введите дату обслуживания (ДД.ММ.ГГГГ):",
         parse_mode="HTML"
     )
+    return ADDING_SERVICE_DATE
 
-@router.message(AdminStates.adding_service_date)
-async def add_service_date(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("❌ Добавление отменено.", reply_markup=admin_kb)
-        return
-    raw_date = message.text.strip()
+async def add_service_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        return ConversationHandler.END
+    raw_date = update.message.text.strip()
     for fmt in ["%d.%m.%Y", "%Y-%m-%d", "%d.%m.%y"]:
         try:
             parsed = datetime.strptime(raw_date, fmt)
-            formatted_date = parsed.strftime("%Y-%m-%d")
-            await state.update_data(service_date=formatted_date)
-            await state.set_state(AdminStates.adding_service_mileage)
-            await message.answer("Введите пробег (только число, км):")
-            return
+            context.user_data['service_date'] = parsed.strftime("%Y-%m-%d")
+            await update.message.reply_text("Введите пробег (только число, км):")
+            return ADDING_SERVICE_MILEAGE
         except ValueError:
             continue
-    await message.answer("❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ:")
+    await update.message.reply_text("❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ:")
+    return ADDING_SERVICE_DATE
 
-@router.message(AdminStates.adding_service_mileage)
-async def add_service_mileage(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("❌ Добавление отменено.", reply_markup=admin_kb)
-        return
+async def add_service_mileage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        return ConversationHandler.END
     try:
-        mileage = int(message.text.strip().replace(" ", ""))
+        mileage = int(update.message.text.strip().replace(" ", ""))
     except ValueError:
-        await message.answer("❌ Введите число (пробег в км):")
-        return
-    await state.update_data(service_mileage=mileage)
-    await state.set_state(AdminStates.adding_service_details)
-    await message.answer(
+        await update.message.reply_text("❌ Введите число (пробег в км):")
+        return ADDING_SERVICE_MILEAGE
+    context.user_data['service_mileage'] = mileage
+    await update.message.reply_text(
         "Теперь введите данные обслуживания <b>одним сообщением</b> "
         "в формате Ключ=Значение (каждый с новой строки):\n\n"
         "<code>oil_type=Castrol 5W-30\n"
@@ -531,15 +456,13 @@ async def add_service_mileage(message: Message, state: FSMContext):
         "Можно указать только нужные поля.",
         parse_mode="HTML"
     )
+    return ADDING_SERVICE_DETAILS
 
-@router.message(AdminStates.adding_service_details)
-async def add_service_details(message: Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("❌ Добавление отменено.", reply_markup=admin_kb)
-        return
+async def add_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        return ConversationHandler.END
 
-    data = await state.get_data()
     fields = {}
     allowed_keys = [
         'oil_type', 'oil_volume', 'oil_filter', 'air_filter', 'cabin_filter',
@@ -550,7 +473,7 @@ async def add_service_details(message: Message, state: FSMContext):
         'total_amount', 'master', 'notes'
     ]
 
-    for line in message.text.strip().split('\n'):
+    for line in update.message.text.strip().split('\n'):
         line = line.strip()
         if '=' in line:
             key, value = line.split('=', 1)
@@ -576,7 +499,7 @@ async def add_service_details(message: Message, state: FSMContext):
         total_amount, master, notes)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            data['car_id'], data['service_date'], data['service_mileage'],
+            context.user_data['car_id'], context.user_data['service_date'], context.user_data['service_mileage'],
             fields.get('oil_type', ''), fields.get('oil_volume', ''),
             fields.get('oil_filter', 'Да'), fields.get('air_filter', 'Да'),
             fields.get('cabin_filter', 'Да'), fields.get('fuel_filter', 'Нет'),
@@ -595,20 +518,18 @@ async def add_service_details(message: Message, state: FSMContext):
     conn.commit()
     conn.close()
 
-    await message.answer(
+    await update.message.reply_text(
         f"✅ Запись об обслуживании добавлена!\n\n"
-        f"🚗 {data['car_info']}\n"
-        f"📅 Дата: <b>{data['service_date']}</b>\n"
-        f"🔢 Пробег: <b>{data['service_mileage']:,} км</b>".replace(',', ' '),
-        reply_markup=admin_kb,
-        parse_mode="HTML"
+        f"🚗 {context.user_data['car_info']}\n"
+        f"📅 Дата: {context.user_data['service_date']}\n"
+        f"🔢 Пробег: {context.user_data['service_mileage']:,} км".replace(',', ' '),
+        reply_markup=admin_kb
     )
-    await state.clear()
+    return ConversationHandler.END
 
 # ===================== ОБЩИЕ =====================
-@router.message(F.text == "ℹ️ О сервисе")
-async def about_service(message: Message):
-    await message.answer(
+async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
         "🔧 <b>Автосервис</b>\n\n"
         "✅ Обслуживание автомобилей с сохранением истории\n"
         "✅ Прозрачность всех работ и материалов\n"
@@ -616,9 +537,8 @@ async def about_service(message: Message):
         parse_mode="HTML"
     )
 
-@router.message(F.text == "📞 Контакты")
-async def contacts(message: Message):
-    await message.answer(
+async def contacts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
         "📞 <b>Наши контакты:</b>\n\n"
         "📍 Адрес: укажите здесь\n"
         "📱 Телефон: укажите здесь\n"
@@ -626,21 +546,74 @@ async def contacts(message: Message):
         parse_mode="HTML"
     )
 
-@router.message(F.text == "❌ Выйти из админки")
-async def exit_admin(message: Message):
-    if is_admin(message.from_user.id):
-        await message.answer("Вы вышли из админ-панели.", reply_markup=main_kb)
+async def exit_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_admin(update.effective_user.id):
+        await update.message.reply_text("Вы вышли из админ-панели.", reply_markup=main_kb)
 
-@router.message(F.text == "❌ Отмена")
-async def cancel_action(message: Message, state: FSMContext):
-    await state.clear()
-    kb = admin_kb if is_admin(message.from_user.id) else main_kb
-    await message.answer("❌ Действие отменено.", reply_markup=kb)
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = admin_kb if is_admin(update.effective_user.id) else main_kb
+    await update.message.reply_text("❌ Действие отменено.", reply_markup=kb)
+    return ConversationHandler.END
 
 # ===================== ЗАПУСК =====================
-async def main():
+def main():
+    app = Application.builder().token(TOKEN).build()
+
+    # Основные команды
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin_cmd))
+
+    # Запрос истории
+    query_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex("^🔍 Запросить историю$"), request_query),
+            MessageHandler(filters.Regex("^🔍 Найти авто \\(админ\\)$"), request_query),
+        ],
+        states={
+            WAITING_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_query)],
+        },
+        fallbacks=[MessageHandler(filters.Regex("^❌ Отмена$"), cancel)],
+    )
+    app.add_handler(query_handler)
+
+    # Добавление авто
+    add_car_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^➕ Добавить автомобиль$"), add_car_start)],
+        states={
+            ADDING_CAR_VIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_car_vin)],
+            ADDING_CAR_PLATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_car_plate)],
+            ADDING_CAR_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_car_brand)],
+            ADDING_CAR_MODEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_car_model)],
+            ADDING_CAR_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_car_year)],
+            ADDING_CAR_CLIENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_car_client_name)],
+            ADDING_CAR_CLIENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_car_client_phone)],
+        },
+        fallbacks=[MessageHandler(filters.Regex("^❌ Отмена$"), cancel)],
+    )
+    app.add_handler(add_car_handler)
+
+    # Добавление обслуживания
+    add_service_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^🔧 Добавить обслуживание$"), add_service_start)],
+        states={
+            SELECTING_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_car)],
+            ADDING_SERVICE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_service_date)],
+            ADDING_SERVICE_MILEAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_service_mileage)],
+            ADDING_SERVICE_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_service_details)],
+        },
+        fallbacks=[MessageHandler(filters.Regex("^❌ Отмена$"), cancel)],
+    )
+    app.add_handler(add_service_handler)
+
+    # Кнопки меню
+    app.add_handler(MessageHandler(filters.Regex("^📋 Все автомобили$"), list_cars))
+    app.add_handler(MessageHandler(filters.Regex("^ℹ️ О сервисе$"), about))
+    app.add_handler(MessageHandler(filters.Regex("^📞 Контакты$"), contacts))
+    app.add_handler(MessageHandler(filters.Regex("^❌ Выйти из админки$"), exit_admin))
+    app.add_handler(MessageHandler(filters.Regex("^❌ Отмена$"), cancel))
+
     print("Бот запущен!")
-    await dp.start_polling(bot)
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
