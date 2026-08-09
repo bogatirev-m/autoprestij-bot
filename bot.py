@@ -7,8 +7,9 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
 # ===================== НАСТРОЙКИ =====================
-TOKEN = "8972845479:AAFkpr9Bc0K2UBA8x3hZmobPlKLUK-4PKtA"
-ADMIN_IDS = [8621244180,740869889,8983954588]
+TOKEN = "8972845479:AAFkpr9Bc0K2UBA8x3hZmobPlKLUK-4PKtA"           # ← ваш токен из @BotFather
+ADMIN_IDS = [8621244180,740869889,8983954588]              # ← ваш Telegram ID
+DATABASE_URL = "postgresql://postgres:[Sukasuka0003.]@db.vguziihdwdpkxngpwqrs.supabase.co:5432/postgres"  # ← строка из Supabase
 # ===================== БАЗА ДАННЫХ =====================
 def init_db():
     conn = sqlite3.connect("autoservice.db")
