@@ -1,8 +1,9 @@
 import re
-import sqlite3
 import threading
 from datetime import datetime
 
+import psycopg2
+import psycopg2.extras
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
@@ -11,59 +12,11 @@ TOKEN = "8972845479:AAFkpr9Bc0K2UBA8x3hZmobPlKLUK-4PKtA"           # ← ваш 
 ADMIN_IDS = [8621244180,740869889,8983954588]              # ← ваш Telegram ID
 DATABASE_URL = "postgresql://postgres:[Sukasuka0003.]@db.vguziihdwdpkxngpwqrs.supabase.co:5432/postgres"  # ← строка из Supabase
 # ===================== БАЗА ДАННЫХ =====================
+def get_connection():
+    return psycopg2.connect(DATABASE_URL)
+
 def init_db():
-    conn = sqlite3.connect("autoservice.db")
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS cars (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            vin TEXT UNIQUE,
-            plate TEXT UNIQUE,
-            plate_country TEXT,
-            brand TEXT DEFAULT '',
-            model TEXT DEFAULT '',
-            year INTEGER DEFAULT 0,
-            client_name TEXT DEFAULT '',
-            client_phone TEXT DEFAULT '',
-            added_date TEXT DEFAULT (datetime('now', 'localtime'))
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS services (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            car_id INTEGER NOT NULL,
-            date TEXT NOT NULL,
-            mileage INTEGER NOT NULL,
-            oil_type TEXT DEFAULT '',
-            oil_volume TEXT DEFAULT '',
-            oil_filter TEXT DEFAULT 'Да',
-            air_filter TEXT DEFAULT 'Да',
-            cabin_filter TEXT DEFAULT 'Да',
-            fuel_filter TEXT DEFAULT 'Нет',
-            brake_pads_front TEXT DEFAULT '',
-            brake_pads_rear TEXT DEFAULT '',
-            brake_discs_front TEXT DEFAULT '',
-            brake_discs_rear TEXT DEFAULT '',
-            brake_fluid TEXT DEFAULT '',
-            coolant TEXT DEFAULT '',
-            transmission_oil TEXT DEFAULT '',
-            spark_plugs TEXT DEFAULT '',
-            timing_belt TEXT DEFAULT '',
-            drive_belt TEXT DEFAULT '',
-            battery TEXT DEFAULT '',
-            suspension_work TEXT DEFAULT '',
-            steering_work TEXT DEFAULT '',
-            exhaust_work TEXT DEFAULT '',
-            diagnosis TEXT DEFAULT '',
-            other_work TEXT DEFAULT '',
-            total_amount REAL DEFAULT 0,
-            master TEXT DEFAULT '',
-            notes TEXT DEFAULT '',
-            FOREIGN KEY (car_id) REFERENCES cars(id)
-        )
-    """)
-    conn.commit()
-    conn.close()
+    pass
 
 init_db()
 
@@ -106,31 +59,31 @@ def detect_plate_country(plate: str) -> str:
     return "Неизвестно"
 
 def search_car(query: str) -> dict | None:
-    conn = sqlite3.connect("autoservice.db")
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+    conn = get_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     query_clean = re.sub(r'\s+', '', query.upper())
-    cur.execute("SELECT * FROM cars WHERE UPPER(REPLACE(vin, ' ', '')) = ? OR UPPER(REPLACE(plate, ' ', '')) = ?",
+    cur.execute("SELECT * FROM cars WHERE UPPER(REPLACE(vin, ' ', '')) = %s OR UPPER(REPLACE(plate, ' ', '')) = %s",
                 (query_clean, query_clean))
     car = cur.fetchone()
+    cur.close()
     conn.close()
     return dict(car) if car else None
 
 def get_services(car_id: int) -> list:
-    conn = sqlite3.connect("autoservice.db")
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM services WHERE car_id = ? ORDER BY date DESC", (car_id,))
+    conn = get_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute("SELECT * FROM services WHERE car_id = %s ORDER BY date DESC", (car_id,))
     services = [dict(row) for row in cur.fetchall()]
+    cur.close()
     conn.close()
     return services
 
 def get_all_cars() -> list:
-    conn = sqlite3.connect("autoservice.db")
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+    conn = get_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cur.execute("SELECT * FROM cars ORDER BY id DESC LIMIT 20")
     cars = [dict(row) for row in cur.fetchall()]
+    cur.close()
     conn.close()
     return cars
 
@@ -143,39 +96,14 @@ def format_services(services: list) -> str:
         parts = []
         parts.append(f"📅 <b>{s['date']}</b> | Пробег: <b>{s['mileage']:,} км</b>".replace(',', ' '))
 
-        if s['oil_type']:
-            parts.append(f"🛢 Масло: <b>{s['oil_type']}</b> ({s['oil_volume']})")
+        if s.get('other_work'):
+            parts.append(f"🔧 <b>Работы:</b> {s['other_work']}")
 
-        works = []
-        if s['oil_filter'] == 'Да': works.append("масляный фильтр")
-        if s['air_filter'] == 'Да': works.append("воздушный фильтр")
-        if s['cabin_filter'] == 'Да': works.append("салонный фильтр")
-        if s['fuel_filter'] == 'Да': works.append("топливный фильтр")
-        if s['brake_pads_front']: works.append(f"передние колодки: {s['brake_pads_front']}")
-        if s['brake_pads_rear']: works.append(f"задние колодки: {s['brake_pads_rear']}")
-        if s['brake_discs_front']: works.append(f"передние диски: {s['brake_discs_front']}")
-        if s['brake_discs_rear']: works.append(f"задние диски: {s['brake_discs_rear']}")
-        if s['brake_fluid']: works.append(f"тормозная жидкость: {s['brake_fluid']}")
-        if s['coolant']: works.append(f"антифриз: {s['coolant']}")
-        if s['transmission_oil']: works.append(f"масло КПП: {s['transmission_oil']}")
-        if s['spark_plugs']: works.append(f"свечи: {s['spark_plugs']}")
-        if s['timing_belt']: works.append(f"ремень ГРМ: {s['timing_belt']}")
-        if s['drive_belt']: works.append(f"приводной ремень: {s['drive_belt']}")
-        if s['battery']: works.append(f"АКБ: {s['battery']}")
-        if s['suspension_work']: works.append(f"подвеска: {s['suspension_work']}")
-        if s['steering_work']: works.append(f"рулевое: {s['steering_work']}")
-        if s['exhaust_work']: works.append(f"выхлоп: {s['exhaust_work']}")
-        if s['diagnosis']: works.append(f"диагностика: {s['diagnosis']}")
-        if s['other_work']: works.append(f"прочее: {s['other_work']}")
-
-        if works:
-            parts.append(f"🔧 <b>Работы:</b> {', '.join(works)}")
-
-        if s['master']:
+        if s.get('master'):
             parts.append(f"👨‍🔧 Мастер: <b>{s['master']}</b>")
-        if s['total_amount']:
+        if s.get('total_amount'):
             parts.append(f"💰 Сумма: <b>{s['total_amount']} ₽</b>")
-        if s['notes']:
+        if s.get('notes'):
             parts.append(f"📝 <i>{s['notes']}</i>")
 
         result += "\n".join(parts) + "\n" + "─" * 25 + "\n"
@@ -333,11 +261,11 @@ async def add_car_client_phone(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
 
-    conn = sqlite3.connect("autoservice.db")
+    conn = get_connection()
     cur = conn.cursor()
     try:
         cur.execute(
-            "INSERT INTO cars (vin, plate, plate_country, brand, model, year, client_name, client_phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO cars (vin, plate, plate_country, brand, model, year, client_name, client_phone) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
             (context.user_data['vin'], context.user_data['plate'], context.user_data['plate_country'],
              context.user_data['brand'], context.user_data['model'], context.user_data['year'],
              context.user_data['client_name'], update.message.text.strip())
@@ -352,9 +280,11 @@ async def add_car_client_phone(update: Update, context: ContextTypes.DEFAULT_TYP
             f"📞 Телефон: {update.message.text.strip()}",
             reply_markup=admin_kb
         )
-    except sqlite3.IntegrityError:
-        await update.message.reply_text("❌ Автомобиль с таким VIN или госномером уже существует.", reply_markup=admin_kb)
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text(f"❌ Ошибка: {e}", reply_markup=admin_kb)
     finally:
+        cur.close()
         conn.close()
     return ConversationHandler.END
 
@@ -397,11 +327,11 @@ async def select_car(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Отправьте числовой ID автомобиля:")
         return SELECTING_CAR
 
-    conn = sqlite3.connect("autoservice.db")
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM cars WHERE id = ?", (car_id,))
+    conn = get_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute("SELECT * FROM cars WHERE id = %s", (car_id,))
     car = cur.fetchone()
+    cur.close()
     conn.close()
 
     if not car:
@@ -446,21 +376,15 @@ async def add_service_mileage(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data['service_mileage'] = mileage
     await update.message.reply_text(
         "Теперь введите данные обслуживания в формате <b>Ключ=Значение</b> (каждый с новой строки):\n\n"
-        "<code>масло=Castrol 5W-30\n"
-        "объём_масла=4.2л\n"
-        "масляный_фильтр=Да\n"
-        "воздушный_фильтр=Да\n"
-        "салонный_фильтр=Да\n"
+        "<code>работы=Замена масла Castrol 5W-30, масляный фильтр, воздушный фильтр\n"
         "мастер=Иванов\n"
         "сумма=12500\n"
         "заметки=Рекомендация: замена ГРМ через 10 000 км</code>\n\n"
         "<b>Доступные ключи:</b>\n"
-        "масло, объём_масла, масляный_фильтр, воздушный_фильтр, салонный_фильтр, топливный_фильтр\n"
-        "колодки_перед, колодки_зад, диски_перед, диски_зад\n"
-        "тормозная_жидкость, антифриз, масло_кпп, свечи\n"
-        "ремень_грм, приводной_ремень, акб\n"
-        "подвеска, рулевое, выхлоп, диагностика, прочее\n"
-        "сумма, мастер, заметки\n\n"
+        "• работы — что сделали (пишите своими словами)\n"
+        "• мастер — кто делал\n"
+        "• сумма — стоимость\n"
+        "• заметки — дополнительная информация\n\n"
         "Можно указать только нужные поля.",
         parse_mode="HTML"
     )
@@ -472,45 +396,21 @@ async def add_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
 
     keys_map = {
-        'масло': 'oil_type',
-        'объём_масла': 'oil_volume',
-        'масляный_фильтр': 'oil_filter',
-        'воздушный_фильтр': 'air_filter',
-        'салонный_фильтр': 'cabin_filter',
-        'топливный_фильтр': 'fuel_filter',
-        'колодки_перед': 'brake_pads_front',
-        'колодки_зад': 'brake_pads_rear',
-        'диски_перед': 'brake_discs_front',
-        'диски_зад': 'brake_discs_rear',
-        'тормозная_жидкость': 'brake_fluid',
-        'антифриз': 'coolant',
-        'масло_кпп': 'transmission_oil',
-        'свечи': 'spark_plugs',
-        'ремень_грм': 'timing_belt',
-        'приводной_ремень': 'drive_belt',
-        'акб': 'battery',
-        'подвеска': 'suspension_work',
-        'рулевое': 'steering_work',
-        'выхлоп': 'exhaust_work',
-        'диагностика': 'diagnosis',
-        'прочее': 'other_work',
-        'сумма': 'total_amount',
+        'работы': 'work_done',
         'мастер': 'master',
+        'сумма': 'total_amount',
         'заметки': 'notes',
     }
 
     fields = {}
-
     for line in update.message.text.strip().split('\n'):
         line = line.strip()
         if '=' in line:
             key, value = line.split('=', 1)
             key = key.strip().lower()
             value = value.strip()
-            
             if key in keys_map:
                 key = keys_map[key]
-            
             if key == 'total_amount':
                 try:
                     fields[key] = float(value)
@@ -519,34 +419,22 @@ async def add_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE
             else:
                 fields[key] = value
 
-    conn = sqlite3.connect("autoservice.db")
+    conn = get_connection()
     cur = conn.cursor()
     cur.execute(
         """INSERT INTO services 
-        (car_id, date, mileage, oil_type, oil_volume, oil_filter, air_filter, cabin_filter,
-        fuel_filter, brake_pads_front, brake_pads_rear, brake_discs_front, brake_discs_rear,
-        brake_fluid, coolant, transmission_oil, spark_plugs, timing_belt, drive_belt,
-        battery, suspension_work, steering_work, exhaust_work, diagnosis, other_work,
-        total_amount, master, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (car_id, date, mileage, other_work, total_amount, master, notes)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)""",
         (
             context.user_data['car_id'], context.user_data['service_date'], context.user_data['service_mileage'],
-            fields.get('oil_type', ''), fields.get('oil_volume', ''),
-            fields.get('oil_filter', 'Да'), fields.get('air_filter', 'Да'),
-            fields.get('cabin_filter', 'Да'), fields.get('fuel_filter', 'Нет'),
-            fields.get('brake_pads_front', ''), fields.get('brake_pads_rear', ''),
-            fields.get('brake_discs_front', ''), fields.get('brake_discs_rear', ''),
-            fields.get('brake_fluid', ''), fields.get('coolant', ''),
-            fields.get('transmission_oil', ''), fields.get('spark_plugs', ''),
-            fields.get('timing_belt', ''), fields.get('drive_belt', ''),
-            fields.get('battery', ''), fields.get('suspension_work', ''),
-            fields.get('steering_work', ''), fields.get('exhaust_work', ''),
-            fields.get('diagnosis', ''), fields.get('other_work', ''),
-            fields.get('total_amount', 0), fields.get('master', ''),
+            fields.get('work_done', ''),
+            fields.get('total_amount', 0),
+            fields.get('master', ''),
             fields.get('notes', '')
         )
     )
     conn.commit()
+    cur.close()
     conn.close()
 
     await update.message.reply_text(
