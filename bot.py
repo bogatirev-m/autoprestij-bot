@@ -15,11 +15,6 @@ DATABASE_URL = "postgresql://postgres:[Sukasuka0003.]@db.vguziihdwdpkxngpwqrs.su
 def get_connection():
     return psycopg2.connect(DATABASE_URL)
 
-def init_db():
-    pass
-
-init_db()
-
 # ===================== КЛАВИАТУРЫ =====================
 main_kb = ReplyKeyboardMarkup([
     [KeyboardButton("🔍 Запросить историю")],
@@ -30,6 +25,7 @@ admin_kb = ReplyKeyboardMarkup([
     [KeyboardButton("➕ Добавить автомобиль")],
     [KeyboardButton("🔧 Добавить обслуживание")],
     [KeyboardButton("📋 Все автомобили")],
+    [KeyboardButton("🗑 Удалить автомобиль")],
     [KeyboardButton("🔍 Найти авто (админ)")],
     [KeyboardButton("❌ Выйти из админки")]
 ], resize_keyboard=True)
@@ -42,7 +38,8 @@ cancel_kb = ReplyKeyboardMarkup([
 (WAITING_QUERY, ADDING_CAR_VIN, ADDING_CAR_PLATE, ADDING_CAR_BRAND, 
  ADDING_CAR_MODEL, ADDING_CAR_YEAR, ADDING_CAR_CLIENT_NAME, 
  ADDING_CAR_CLIENT_PHONE, SELECTING_CAR, ADDING_SERVICE_DATE, 
- ADDING_SERVICE_MILEAGE, ADDING_SERVICE_DETAILS) = range(12)
+ ADDING_SERVICE_MILEAGE, ADDING_SERVICE_DETAILS, DELETE_CAR_ID,
+ DELETE_SERVICE_ID, SELECTING_CAR_FOR_DELETE) = range(15)
 
 # ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
 def is_admin(user_id: int) -> bool:
@@ -87,6 +84,15 @@ def get_all_cars() -> list:
     conn.close()
     return cars
 
+def get_car_by_id(car_id: int) -> dict | None:
+    conn = get_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute("SELECT * FROM cars WHERE id = %s", (car_id,))
+    car = cur.fetchone()
+    cur.close()
+    conn.close()
+    return dict(car) if car else None
+
 def format_services(services: list) -> str:
     if not services:
         return "📭 История обслуживания пуста"
@@ -94,11 +100,10 @@ def format_services(services: list) -> str:
     result = ""
     for s in services:
         parts = []
-        parts.append(f"📅 <b>{s['date']}</b> | Пробег: <b>{s['mileage']:,} км</b>".replace(',', ' '))
+        parts.append(f"🆔 {s['id']} | 📅 <b>{s['date']}</b> | Пробег: <b>{s['mileage']:,} км</b>".replace(',', ' '))
 
         if s.get('other_work'):
             parts.append(f"🔧 <b>Работы:</b> {s['other_work']}")
-
         if s.get('master'):
             parts.append(f"👨‍🔧 Мастер: <b>{s['master']}</b>")
         if s.get('total_amount'):
@@ -110,15 +115,23 @@ def format_services(services: list) -> str:
 
     return result
 
+async def safe_reply(update: Update, text: str, **kwargs):
+    """Безопасная отправка сообщений"""
+    try:
+        return await update.message.reply_text(text, **kwargs)
+    except Exception as e:
+        print(f"Ошибка отправки: {e}")
+        return None
+
 # ===================== КОМАНДЫ =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin(update.effective_user.id):
-        await update.message.reply_text(
+        await safe_reply(update,
             "👋 Добро пожаловать, администратор!\n\nВыберите действие в меню:",
             reply_markup=admin_kb
         )
     else:
-        await update.message.reply_text(
+        await safe_reply(update,
             "👋 Добро пожаловать в автосервис!\n\n"
             "Нажмите кнопку ниже, чтобы запросить историю обслуживания вашего автомобиля.",
             reply_markup=main_kb
@@ -126,13 +139,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔ У вас нет доступа к админ-панели.")
+        await safe_reply(update, "⛔ У вас нет доступа к админ-панели.")
         return
-    await update.message.reply_text("🔐 Админ-панель активна.\nВыберите действие:", reply_markup=admin_kb)
+    await safe_reply(update, "🔐 Админ-панель активна.\nВыберите действие:", reply_markup=admin_kb)
 
 # ===================== ЗАПРОС ИСТОРИИ =====================
 async def request_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    await safe_reply(update,
         "Введите VIN-номер (17 символов) или госномер автомобиля:\n\n"
         "<i>Примеры:\n"
         "• РФ: А123БВ177 или А123БВ 177\n"
@@ -146,12 +159,12 @@ async def request_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def process_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
         kb = admin_kb if is_admin(update.effective_user.id) else main_kb
-        await update.message.reply_text("❌ Запрос отменён.", reply_markup=kb)
+        await safe_reply(update, "❌ Запрос отменён.", reply_markup=kb)
         return ConversationHandler.END
 
     car = search_car(update.message.text.strip())
     if not car:
-        await update.message.reply_text(
+        await safe_reply(update,
             "❌ Автомобиль не найден.\nПроверьте VIN или госномер и попробуйте снова.",
             reply_markup=cancel_kb
         )
@@ -177,14 +190,15 @@ async def process_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     car_info += format_services(services)
 
     kb = admin_kb if is_admin(update.effective_user.id) else main_kb
-    await update.message.reply_text(car_info, parse_mode="HTML", reply_markup=kb)
+    await safe_reply(update, car_info, parse_mode="HTML", reply_markup=kb)
     return ConversationHandler.END
 
 # ===================== АДМИН: ДОБАВЛЕНИЕ АВТО =====================
 async def add_car_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
-    await update.message.reply_text(
+    context.user_data.clear()
+    await safe_reply(update,
         "Введите VIN-номер автомобиля (17 символов):\n<i>Или нажмите ❌ Отмена</i>",
         reply_markup=cancel_kb,
         parse_mode="HTML"
@@ -193,14 +207,15 @@ async def add_car_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_car_vin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
-        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        context.user_data.clear()
+        await safe_reply(update, "❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
     vin = re.sub(r'\s+', '', update.message.text.strip().upper())
     if len(vin) != 17:
-        await update.message.reply_text("❌ VIN должен содержать ровно 17 символов. Попробуйте снова:")
+        await safe_reply(update, "❌ VIN должен содержать ровно 17 символов. Попробуйте снова:")
         return ADDING_CAR_VIN
     context.user_data['vin'] = vin
-    await update.message.reply_text(
+    await safe_reply(update,
         "Введите госномер автомобиля:\n<i>Форматы: А123БВ177, 01KG123ABC, 12AB123</i>",
         parse_mode="HTML"
     )
@@ -208,58 +223,80 @@ async def add_car_vin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_car_plate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
-        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        context.user_data.clear()
+        await safe_reply(update, "❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
     plate = update.message.text.strip().upper()
+    if not plate or len(plate) < 3:
+        await safe_reply(update, "❌ Госномер не может быть пустым. Попробуйте снова:")
+        return ADDING_CAR_PLATE
     country = detect_plate_country(plate)
     if country == "Неизвестно":
         country = "РФ"
     context.user_data['plate'] = plate
     context.user_data['plate_country'] = country
-    await update.message.reply_text("Введите марку авто (например, Toyota, BMW):")
+    await safe_reply(update, "Введите марку авто (например, Toyota, BMW):")
     return ADDING_CAR_BRAND
 
 async def add_car_brand(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
-        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        context.user_data.clear()
+        await safe_reply(update, "❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
-    context.user_data['brand'] = update.message.text.strip()
-    await update.message.reply_text("Введите модель авто (например, Camry, X5):")
+    brand = update.message.text.strip()
+    if not brand:
+        await safe_reply(update, "❌ Марка не может быть пустой. Попробуйте снова:")
+        return ADDING_CAR_BRAND
+    context.user_data['brand'] = brand
+    await safe_reply(update, "Введите модель авто (например, Camry, X5):")
     return ADDING_CAR_MODEL
 
 async def add_car_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
-        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        context.user_data.clear()
+        await safe_reply(update, "❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
-    context.user_data['model'] = update.message.text.strip()
-    await update.message.reply_text("Введите год выпуска (например, 2023):")
+    model = update.message.text.strip()
+    if not model:
+        await safe_reply(update, "❌ Модель не может быть пустой. Попробуйте снова:")
+        return ADDING_CAR_MODEL
+    context.user_data['model'] = model
+    await safe_reply(update, "Введите год выпуска (например, 2023):")
     return ADDING_CAR_YEAR
 
 async def add_car_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
-        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        context.user_data.clear()
+        await safe_reply(update, "❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
     try:
         year = int(update.message.text.strip())
+        if year < 1900 or year > 2100:
+            await safe_reply(update, "❌ Год должен быть от 1900 до 2100. Попробуйте снова:")
+            return ADDING_CAR_YEAR
     except ValueError:
-        await update.message.reply_text("❌ Введите число. Попробуйте снова:")
+        await safe_reply(update, "❌ Введите число. Попробуйте снова:")
         return ADDING_CAR_YEAR
     context.user_data['year'] = year
-    await update.message.reply_text("Введите имя клиента (можно —):")
+    await safe_reply(update, "Введите имя клиента (можно —):")
     return ADDING_CAR_CLIENT_NAME
 
 async def add_car_client_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
-        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        context.user_data.clear()
+        await safe_reply(update, "❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
-    context.user_data['client_name'] = update.message.text.strip()
-    await update.message.reply_text("Введите телефон клиента (можно —):")
+    context.user_data['client_name'] = update.message.text.strip() or "—"
+    await safe_reply(update, "Введите телефон клиента (можно —):")
     return ADDING_CAR_CLIENT_PHONE
 
 async def add_car_client_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
-        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        context.user_data.clear()
+        await safe_reply(update, "❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
+
+    phone = update.message.text.strip() or "—"
 
     conn = get_connection()
     cur = conn.cursor()
@@ -268,24 +305,83 @@ async def add_car_client_phone(update: Update, context: ContextTypes.DEFAULT_TYP
             "INSERT INTO cars (vin, plate, plate_country, brand, model, year, client_name, client_phone) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
             (context.user_data['vin'], context.user_data['plate'], context.user_data['plate_country'],
              context.user_data['brand'], context.user_data['model'], context.user_data['year'],
-             context.user_data['client_name'], update.message.text.strip())
+             context.user_data['client_name'], phone)
         )
         conn.commit()
-        await update.message.reply_text(
+        await safe_reply(update,
             f"✅ Автомобиль добавлен!\n\n"
             f"🚗 {context.user_data['brand']} {context.user_data['model']} ({context.user_data['year']})\n"
             f"📌 VIN: {context.user_data['vin']}\n"
             f"📋 Госномер: {context.user_data['plate']} ({context.user_data['plate_country']})\n"
             f"👤 Клиент: {context.user_data['client_name']}\n"
-            f"📞 Телефон: {update.message.text.strip()}",
+            f"📞 Телефон: {phone}",
             reply_markup=admin_kb
         )
     except Exception as e:
         conn.rollback()
-        await update.message.reply_text(f"❌ Ошибка: {e}", reply_markup=admin_kb)
+        error_msg = str(e)
+        if "duplicate" in error_msg.lower() or "уникальным" in error_msg.lower() or "unique" in error_msg.lower():
+            await safe_reply(update, "❌ Автомобиль с таким VIN или госномером уже существует.", reply_markup=admin_kb)
+        else:
+            await safe_reply(update, "❌ Ошибка при сохранении. Попробуйте позже.", reply_markup=admin_kb)
     finally:
         cur.close()
         conn.close()
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# ===================== АДМИН: УДАЛЕНИЕ АВТО =====================
+async def delete_car_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    cars = get_all_cars()
+    if not cars:
+        await safe_reply(update, "📭 База автомобилей пуста.", reply_markup=admin_kb)
+        return ConversationHandler.END
+    text = "🗑 <b>Удаление автомобиля</b>\n\nВыберите ID автомобиля для удаления:\n\n"
+    for c in cars:
+        plate_str = f"{c['plate']}" if c['plate'] else "без номера"
+        text += f"🆔 {c['id']} — {c['brand']} {c['model']} | {plate_str}\n"
+    text += "\n<i>ВНИМАНИЕ: Все записи обслуживания тоже удалятся!</i>"
+    await safe_reply(update, text, parse_mode="HTML", reply_markup=cancel_kb)
+    return DELETE_CAR_ID
+
+async def delete_car_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отмена":
+        await safe_reply(update, "❌ Удаление отменено.", reply_markup=admin_kb)
+        return ConversationHandler.END
+
+    try:
+        car_id = int(update.message.text.strip())
+    except ValueError:
+        await safe_reply(update, "❌ Отправьте числовой ID автомобиля:")
+        return DELETE_CAR_ID
+
+    car = get_car_by_id(car_id)
+    if not car:
+        await safe_reply(update, "❌ Автомобиль с таким ID не найден.")
+        return DELETE_CAR_ID
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM services WHERE car_id = %s", (car_id,))
+        cur.execute("DELETE FROM cars WHERE id = %s", (car_id,))
+        conn.commit()
+        await safe_reply(update,
+            f"✅ Автомобиль удалён!\n\n"
+            f"🚗 {car['brand']} {car['model']} | {car['plate']}\n"
+            f"👤 Клиент: {car['client_name']}",
+            reply_markup=admin_kb
+        )
+    except Exception as e:
+        conn.rollback()
+        await safe_reply(update, "❌ Ошибка при удалении.", reply_markup=admin_kb)
+    finally:
+        cur.close()
+        conn.close()
+
     return ConversationHandler.END
 
 # ===================== АДМИН: ВСЕ АВТО =====================
@@ -294,13 +390,13 @@ async def list_cars(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     cars = get_all_cars()
     if not cars:
-        await update.message.reply_text("📭 База автомобилей пуста.", reply_markup=admin_kb)
+        await safe_reply(update, "📭 База автомобилей пуста.", reply_markup=admin_kb)
         return
     text = "📋 <b>Последние автомобили в базе:</b>\n\n"
     for c in cars:
         plate_str = f"{c['plate']} ({c['plate_country']})" if c['plate'] else "—"
         text += f"🆔 {c['id']} | {c['brand']} {c['model']} | {plate_str} | {c['client_name']}\n"
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=admin_kb)
+    await safe_reply(update, text, parse_mode="HTML", reply_markup=admin_kb)
 
 # ===================== АДМИН: ДОБАВЛЕНИЕ ОБСЛУЖИВАНИЯ =====================
 async def add_service_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -308,40 +404,33 @@ async def add_service_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     cars = get_all_cars()
     if not cars:
-        await update.message.reply_text("❌ Сначала добавьте автомобиль в базу.", reply_markup=admin_kb)
+        await safe_reply(update, "❌ Сначала добавьте автомобиль в базу.", reply_markup=admin_kb)
         return ConversationHandler.END
     text = "Выберите автомобиль (отправьте <b>ID</b>):\n\n"
     for c in cars:
         plate_str = f"{c['plate']}" if c['plate'] else "без номера"
         text += f"🆔 {c['id']} — {c['brand']} {c['model']} | {plate_str}\n"
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=cancel_kb)
+    await safe_reply(update, text, parse_mode="HTML", reply_markup=cancel_kb)
     return SELECTING_CAR
 
 async def select_car(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
-        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        await safe_reply(update, "❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
     try:
         car_id = int(update.message.text.strip())
     except ValueError:
-        await update.message.reply_text("❌ Отправьте числовой ID автомобиля:")
+        await safe_reply(update, "❌ Отправьте числовой ID автомобиля:")
         return SELECTING_CAR
 
-    conn = get_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute("SELECT * FROM cars WHERE id = %s", (car_id,))
-    car = cur.fetchone()
-    cur.close()
-    conn.close()
-
+    car = get_car_by_id(car_id)
     if not car:
-        await update.message.reply_text("❌ Автомобиль с таким ID не найден.")
+        await safe_reply(update, "❌ Автомобиль с таким ID не найден.")
         return SELECTING_CAR
 
-    car = dict(car)
     context.user_data['car_id'] = car_id
     context.user_data['car_info'] = f"{car['brand']} {car['model']} ({car['plate']})"
-    await update.message.reply_text(
+    await safe_reply(update,
         f"🚗 <b>{car['brand']} {car['model']} | {car['plate']}</b>\n\n"
         f"Введите дату обслуживания (ДД.ММ.ГГГГ):",
         parse_mode="HTML"
@@ -350,31 +439,31 @@ async def select_car(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_service_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
-        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        await safe_reply(update, "❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
     raw_date = update.message.text.strip()
     for fmt in ["%d.%m.%Y", "%Y-%m-%d", "%d.%m.%y"]:
         try:
             parsed = datetime.strptime(raw_date, fmt)
             context.user_data['service_date'] = parsed.strftime("%Y-%m-%d")
-            await update.message.reply_text("Введите пробег (только число, км):")
+            await safe_reply(update, "Введите пробег (только число, км):")
             return ADDING_SERVICE_MILEAGE
         except ValueError:
             continue
-    await update.message.reply_text("❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ:")
+    await safe_reply(update, "❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ:")
     return ADDING_SERVICE_DATE
 
 async def add_service_mileage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
-        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        await safe_reply(update, "❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
     try:
         mileage = int(update.message.text.strip().replace(" ", ""))
     except ValueError:
-        await update.message.reply_text("❌ Введите число (пробег в км):")
+        await safe_reply(update, "❌ Введите число (пробег в км):")
         return ADDING_SERVICE_MILEAGE
     context.user_data['service_mileage'] = mileage
-    await update.message.reply_text(
+    await safe_reply(update,
         "Теперь введите данные обслуживания в формате <b>Ключ=Значение</b> (каждый с новой строки):\n\n"
         "<code>работы=Замена масла Castrol 5W-30, масляный фильтр, воздушный фильтр\n"
         "мастер=Иванов\n"
@@ -392,7 +481,7 @@ async def add_service_mileage(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def add_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отмена":
-        await update.message.reply_text("❌ Добавление отменено.", reply_markup=admin_kb)
+        await safe_reply(update, "❌ Добавление отменено.", reply_markup=admin_kb)
         return ConversationHandler.END
 
     keys_map = {
@@ -421,34 +510,39 @@ async def add_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute(
-        """INSERT INTO services 
-        (car_id, date, mileage, other_work, total_amount, master, notes)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-        (
-            context.user_data['car_id'], context.user_data['service_date'], context.user_data['service_mileage'],
-            fields.get('work_done', ''),
-            fields.get('total_amount', 0),
-            fields.get('master', ''),
-            fields.get('notes', '')
+    try:
+        cur.execute(
+            """INSERT INTO services 
+            (car_id, date, mileage, other_work, total_amount, master, notes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (
+                context.user_data['car_id'], context.user_data['service_date'], context.user_data['service_mileage'],
+                fields.get('work_done', ''),
+                fields.get('total_amount', 0),
+                fields.get('master', ''),
+                fields.get('notes', '')
+            )
         )
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+        conn.commit()
+        await safe_reply(update,
+            f"✅ Запись об обслуживании добавлена!\n\n"
+            f"🚗 {context.user_data['car_info']}\n"
+            f"📅 Дата: {context.user_data['service_date']}\n"
+            f"🔢 Пробег: {context.user_data['service_mileage']:,} км".replace(',', ' '),
+            reply_markup=admin_kb
+        )
+    except Exception as e:
+        conn.rollback()
+        await safe_reply(update, "❌ Ошибка при сохранении. Попробуйте позже.", reply_markup=admin_kb)
+    finally:
+        cur.close()
+        conn.close()
 
-    await update.message.reply_text(
-        f"✅ Запись об обслуживании добавлена!\n\n"
-        f"🚗 {context.user_data['car_info']}\n"
-        f"📅 Дата: {context.user_data['service_date']}\n"
-        f"🔢 Пробег: {context.user_data['service_mileage']:,} км".replace(',', ' '),
-        reply_markup=admin_kb
-    )
     return ConversationHandler.END
 
 # ===================== ОБЩИЕ =====================
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    await safe_reply(update,
         "🔧 <b>Автосервис</b>\n\n"
         "✅ Обслуживание автомобилей с сохранением истории\n"
         "✅ Прозрачность всех работ и материалов\n"
@@ -457,7 +551,7 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def contacts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    await safe_reply(update,
         "📞 <b>Наши контакты:</b>\n\n"
         "📍 Адрес: укажите здесь\n"
         "📱 Телефон: укажите здесь\n"
@@ -467,11 +561,12 @@ async def contacts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def exit_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin(update.effective_user.id):
-        await update.message.reply_text("Вы вышли из админ-панели.", reply_markup=main_kb)
+        await safe_reply(update, "Вы вышли из админ-панели.", reply_markup=main_kb)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     kb = admin_kb if is_admin(update.effective_user.id) else main_kb
-    await update.message.reply_text("❌ Действие отменено.", reply_markup=kb)
+    await safe_reply(update, "❌ Действие отменено.", reply_markup=kb)
     return ConversationHandler.END
 
 # ===================== ЗАПУСК =====================
@@ -521,6 +616,15 @@ def main():
         fallbacks=[MessageHandler(filters.Regex("^❌ Отмена$"), cancel)],
     )
     app.add_handler(add_car_handler)
+
+    delete_car_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^🗑 Удалить автомобиль$"), delete_car_start)],
+        states={
+            DELETE_CAR_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_car_confirm)],
+        },
+        fallbacks=[MessageHandler(filters.Regex("^❌ Отмена$"), cancel)],
+    )
+    app.add_handler(delete_car_handler)
 
     add_service_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🔧 Добавить обслуживание$"), add_service_start)],
