@@ -110,7 +110,7 @@ def fmt_services(rows):
         if s.get('other_work'): res += f"🔧 <b>Работы:</b> {s['other_work']}\n"
         if s.get('master'): res += f"👨‍🔧 Мастер: <b>{s['master']}</b>\n"
         if s.get('total_amount'): res += f"💰 Сумма: <b>{s['total_amount']}</b> ₽\n"
-        if s.get('notes'): res += f"📝 <i>{s['notes']}</i>\n"
+        if s.get('notes'): res += f"📝 <i>Рекомендации: {s['notes']}</i>\n"
         res += "─" * 25 + "\n"
     return res
 
@@ -313,7 +313,7 @@ async def svc_mileage(update, context):
         "работы=Замена масла, фильтры\n"
         "мастер=Иванов\n"
         "сумма=5000\n"
-        "заметки=Всё ок"
+        "рекомендации=Всё ок"
     )
     return SVC_DETAILS
 
@@ -329,7 +329,7 @@ async def svc_details(update, context):
             elif k == 'сумма':
                 try: fields['sum'] = float(v)
                 except: pass
-            elif k == 'заметки': fields['notes'] = v
+            elif k == 'рекомендации': fields['notes'] = v
     conn = get_conn()
     conn.execute(
         "INSERT INTO services (car_id, date, mileage, other_work, total_amount, master, notes) VALUES (?,?,?,?,?,?,?)",
