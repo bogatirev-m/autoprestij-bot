@@ -10,7 +10,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 TOKEN = "8972845479:AAFkpr9Bc0K2UBA8x3hZmobPlKLUK-4PKtA"
 ADMIN_IDS = [8621244180,740869889,8983954588]
 SUPABASE_URL = "https://vguziihdwdpkxngpwqrs.supabase.co"  # ← ваш URL проекта
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZndXppaWhkd2Rwa3huZ3B3cXJzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYyNzg3MzYsImV4cCI6MjEwMTg1NDczNn0.1AAZA2mzcjUZmrv5bFXOc4OjmI9qQV9QiFei7oVoEzM"  # ← ваш anon/public ключ из Supabase → Settings → API
+SUPABASE_KEY = "sb_publishable_liWQgdvZTDf5pwGcfK6EGQ_qJhAcSXt"  # ← ваш anon/public ключ из Supabase → Settings → API
 HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
