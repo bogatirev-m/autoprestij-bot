@@ -207,6 +207,13 @@ async def car_phone(update, context):
     if update.message.text == "❌ Отмена": return await cancel(update, context)
     phone = update.message.text.strip() or "—"
     
+    # Проверяем дубликат
+    existing = db_get("cars", {"or": f"(vin.eq.{context.user_data['vin']},plate.eq.{context.user_data['plate']})"})
+    if existing:
+        await update.message.reply_text("❌ Автомобиль с таким VIN или госномером уже существует.", reply_markup=admin_kb)
+        context.user_data.clear()
+        return ConversationHandler.END
+    
     data = {
         "vin": context.user_data['vin'],
         "plate": context.user_data['plate'],
@@ -225,7 +232,7 @@ async def car_phone(update, context):
             reply_markup=admin_kb
         )
     else:
-        await update.message.reply_text("❌ Ошибка. Возможно, такой VIN или номер уже есть.", reply_markup=admin_kb)
+        await update.message.reply_text(f"❌ Ошибка при сохранении. Попробуйте позже.", reply_markup=admin_kb)
     
     context.user_data.clear()
     return ConversationHandler.END
@@ -510,10 +517,8 @@ def plate_country(p):
 
 def find_car(q):
     q = re.sub(r'\s+', '', q.upper())
-    conn = get_conn()
-    c = conn.execute("SELECT * FROM cars WHERE UPPER(REPLACE(vin,' ',''))=? OR UPPER(REPLACE(plate,' ',''))=?", (q,q)).fetchone()
-    conn.close()
-    return dict(c) if c else None
+    cars = db_get("cars", {"or": f"(vin.eq.{q},plate.eq.{q})"})
+    return cars[0] if cars else None
 
 def car_services(cid):
     conn = get_conn()
