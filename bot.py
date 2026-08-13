@@ -9,8 +9,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ===================== НАСТРОЙКИ =====================
 TOKEN = "8972845479:AAFkpr9Bc0K2UBA8x3hZmobPlKLUK-4PKtA"
 ADMIN_IDS = [8621244180,740869889,8983954588]
-SUPABASE_URL = "https://vguziihdwdpkxngpwqrs.supabase.co"  # ← ваш URL проекта
-SUPABASE_KEY = "sb_publishable_liWQgdvZTDf5pwGcfK6EGQ_qJhAcSXt"  # ← ваш anon/public ключ из Supabase → Settings → API
+SUPABASE_URL = "https://vguziihdwdpkxngpwqrs.supabase.co"
+SUPABASE_KEY = "sb_publishable_liWQgdvZTDf5pwGcfK6EGQ_qJhAcSXt"
 HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
