@@ -423,6 +423,11 @@ def run_flask():
     flask_app.run(host='0.0.0.0', port=10000, debug=False, use_reloader=False)
 
 def main():
+    import os
+    if os.environ.get("RENDER_SERVICE_ID"):
+        # Предотвращаем двойной запуск на Render
+        pass
+    
     threading.Thread(target=run_flask, daemon=True).start()
 
     app = Application.builder().token(TOKEN).build()
@@ -475,7 +480,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^❌ Отмена$"), cancel))
 
     print("Бот запущен!")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True, close_loop=False)
 
 if __name__ == "__main__":
     main()
