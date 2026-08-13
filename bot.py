@@ -886,7 +886,13 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^❌ Отмена$"), cancel))
 
     print("Бот запущен!")
-    app.run_polling()
+    
+    # Защита от двойного запуска
+    import os
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        return
+    
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
