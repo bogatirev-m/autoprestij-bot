@@ -422,7 +422,6 @@ def main():
     with open(lock_file, "w") as f:
         f.write(str(os.getpid()))
 
-    try:
         app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_cmd))
@@ -473,10 +472,6 @@ def main():
 
     print("Бот запущен!")
         app.run_polling(drop_pending_updates=True)
-
-    finally:
-        if os.path.exists(lock_file):
-            os.remove(lock_file)
-
+    
 if __name__ == "__main__":
     main()
