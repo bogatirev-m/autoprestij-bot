@@ -7,7 +7,7 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
 # ===================== НАСТРОЙКИ =====================
-TOKEN = "8972845479:AAFkpr9Bc0K2UBA8x3hZmobPlKLUK-4PKtA"
+TOKEN = "8972845479:AAGmuKASCvt2ynCBOCTGswIWTXDurxuNNEE"
 ADMIN_IDS = [8621244180,740869889,8983954588]
 SUPABASE_URL = "https://vguziihdwdpkxngpwqrs.supabase.co"
 SUPABASE_KEY = "sb_publishable_liWQgdvZTDf5pwGcfK6EGQ_qJhAcSXt"
