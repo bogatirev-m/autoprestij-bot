@@ -411,27 +411,19 @@ async def cancel(update, context):
     return ConversationHandler.END
 
 # ===================== ЗАПУСК =====================
-from flask import Flask
-
-flask_app = Flask(__name__)
-
-@flask_app.route('/')
-def home():
-    return "OK"
-
-def run_flask():
-    flask_app.run(host='0.0.0.0', port=10000, debug=False, use_reloader=False)
-
 def main():
     import os
-    if os.environ.get("RENDER_SERVICE_ID"):
-        # Предотвращаем двойной запуск на Render
-        pass
-    
-    threading.Thread(target=run_flask, daemon=True).start()
+    import sys
 
-    app = Application.builder().token(TOKEN).build()
+    lock_file = "/tmp/bot.lock"
+    if os.path.exists(lock_file):
+        print("Бот уже запущен, выхожу...")
+        sys.exit(0)
+    with open(lock_file, "w") as f:
+        f.write(str(os.getpid()))
 
+    try:
+        app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_cmd))
 
@@ -480,7 +472,11 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^❌ Отмена$"), cancel))
 
     print("Бот запущен!")
-    app.run_polling(drop_pending_updates=True, close_loop=False)
+        app.run_polling(drop_pending_updates=True)
+
+    finally:
+        if os.path.exists(lock_file):
+            os.remove(lock_file)
 
 if __name__ == "__main__":
     main()
