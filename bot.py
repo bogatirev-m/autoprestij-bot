@@ -422,7 +422,8 @@ def main():
     with open(lock_file, "w") as f:
         f.write(str(os.getpid()))
 
-        app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_cmd))
 
@@ -472,6 +473,7 @@ def main():
 
     print("Бот запущен!")
     app.run_polling(drop_pending_updates=True)
-    
+    os.remove(lock_file)
+
 if __name__ == "__main__":
     main()
