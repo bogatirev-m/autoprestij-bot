@@ -1,6 +1,7 @@
 import re
 import threading
-import httpx
+import psycopg2
+import psycopg2.extras
 from datetime import datetime
 
 from telegram import Update, ReplyKeyboardMarkup
@@ -9,36 +10,65 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ===================== НАСТРОЙКИ =====================
 TOKEN = "8972845479:AAGmuKASCvt2ynCBOCTGswIWTXDurxuNNEE"
 ADMIN_IDS = [8621244180,740869889,8983954588]
-SUPABASE_URL = "https://vguziihdwdpkxngpwqrs.supabase.co"
-SUPABASE_KEY = "sb_publishable_liWQgdvZTDf5pwGcfK6EGQ_qJhAcSXt"
-HEADERS = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "return=representation"
-}
+DATABASE_URL = "postgresql://postgres.vguziihdwdpkxngpwqrs:[Sukasuka0003]@aws-0-eu-north-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
 
 # ===================== БАЗА ДАННЫХ =====================
-def db_get(path, params=None):
-    try:
-        r = httpx.get(f"{SUPABASE_URL}/rest/v1/{path}", headers=HEADERS, params=params, timeout=10)
-        return r.json() if r.status_code == 200 else []
-    except:
-        return []
+def get_conn():
+    return psycopg2.connect(DATABASE_URL)
 
-def db_post(path, data):
-    try:
-        r = httpx.post(f"{SUPABASE_URL}/rest/v1/{path}", headers=HEADERS, json=data, timeout=10)
-        return r
-    except:
-        return None
+def find_car(q):
+    q = re.sub(r'\s+', '', q.upper())
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute("SELECT * FROM cars WHERE UPPER(REPLACE(vin,' ',''))=%s OR UPPER(REPLACE(plate,' ',''))=%s", (q,q))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return dict(row) if row else None
 
-def db_delete(path, params):
-    try:
-        r = httpx.delete(f"{SUPABASE_URL}/rest/v1/{path}", headers=HEADERS, params=params, timeout=10)
-        return r
-    except:
-        return None
+def car_services(cid):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute("SELECT * FROM services WHERE car_id=%s ORDER BY date DESC", (cid,))
+    rows = [dict(r) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return rows
+
+def all_cars():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute("SELECT * FROM cars ORDER BY id DESC LIMIT 20")
+    rows = [dict(r) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return rows
+
+def car_by_id(cid):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute("SELECT * FROM cars WHERE id=%s", (cid,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return dict(row) if row else None
+
+def fmt_services(rows):
+    if not rows:
+        return "📭 История обслуживания пуста"
+    res = ""
+    for s in rows:
+        res += f"📅 <b>{s['date']}</b> | Пробег: <b>{s['mileage']:,}</b> км\n".replace(',', ' ')
+        if s.get('other_work'):
+            res += f"🔧 <b>Работы:</b> {s['other_work']}\n"
+        if s.get('master'):
+            res += f"👨‍🔧 Мастер: <b>{s['master']}</b>\n"
+        if s.get('total_amount'):
+            res += f"💰 Сумма: <b>{s['total_amount']}</b> ₽\n"
+        if s.get('notes'):
+            res += f"📝 <i>Рекомендации: {s['notes']}</i>\n"
+        res += "─" * 25 + "\n"
+    return res
 
 # ===================== КЛАВИАТУРЫ =====================
 main_kb = ReplyKeyboardMarkup([
@@ -60,7 +90,7 @@ cancel_kb = ReplyKeyboardMarkup([["❌ Отмена"]], resize_keyboard=True)
  CAR_NAME, CAR_PHONE, SVC_SELECT, SVC_DATE, SVC_MILEAGE, SVC_DETAILS,
  DEL_CAR) = range(13)
 
-# ===================== ФУНКЦИИ =====================
+# ===================== ВСПОМОГАТЕЛЬНЫЕ =====================
 def is_admin(uid):
     return uid in ADMIN_IDS
 
@@ -73,38 +103,6 @@ def plate_country(p):
     if re.match(r'^\d{2}[A-Z]{2}\d{3}$', p):
         return "Армения"
     return "РФ"
-
-def find_car(q):
-    q = re.sub(r'\s+', '', q.upper())
-    cars = db_get("cars", {"or": f"(vin.eq.{q},plate.eq.{q})"})
-    return cars[0] if cars else None
-
-def car_services(cid):
-    return db_get("services", {"car_id": f"eq.{cid}", "order": "date.desc"})
-
-def all_cars():
-    return db_get("cars", {"order": "id.desc", "limit": "20"})
-
-def car_by_id(cid):
-    cars = db_get("cars", {"id": f"eq.{cid}"})
-    return cars[0] if cars else None
-
-def fmt_services(rows):
-    if not rows:
-        return "📭 История обслуживания пуста"
-    res = ""
-    for s in rows:
-        res += f"📅 <b>{s['date']}</b> | Пробег: <b>{s['mileage']:,}</b> км\n".replace(',', ' ')
-        if s.get('other_work'):
-            res += f"🔧 <b>Работы:</b> {s['other_work']}\n"
-        if s.get('master'):
-            res += f"👨‍🔧 Мастер: <b>{s['master']}</b>\n"
-        if s.get('total_amount'):
-            res += f"💰 Сумма: <b>{s['total_amount']}</b> ₽\n"
-        if s.get('notes'):
-            res += f"📝 <i>Рекомендации: {s['notes']}</i>\n"
-        res += "─" * 25 + "\n"
-    return res
 
 # ===================== СТАРТ =====================
 async def start(update, context):
@@ -235,34 +233,37 @@ async def car_phone(update, context):
         return await cancel(update, context)
     phone = update.message.text.strip() or "—"
 
-    # Проверяем дубликат
-    existing = db_get("cars", {"or": f"(vin.eq.{context.user_data['vin']},plate.eq.{context.user_data['plate']})"})
-    if existing:
-        await update.message.reply_text("❌ Такой VIN или номер уже существует.", reply_markup=admin_kb)
-        context.user_data.clear()
-        return ConversationHandler.END
+    # Проверка дубликата и вставка через psycopg2
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT id FROM cars WHERE vin=%s OR plate=%s",
+            (context.user_data['vin'], context.user_data['plate'])
+        )
+        if cur.fetchone():
+            await update.message.reply_text("❌ Такой VIN или номер уже существует.", reply_markup=admin_kb)
+            context.user_data.clear()
+            return ConversationHandler.END
 
-    data = {
-        "vin": context.user_data['vin'],
-        "plate": context.user_data['plate'],
-        "plate_country": context.user_data['pcountry'],
-        "brand": context.user_data['brand'],
-        "model": context.user_data['model'],
-        "year": context.user_data['year'],
-        "client_name": context.user_data['client_name'],
-        "client_phone": phone
-    }
-    r = db_post("cars", data)
-
-    if r is not None and r.status_code == 201:
+        cur.execute(
+            "INSERT INTO cars (vin, plate, plate_country, brand, model, year, client_name, client_phone) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            (context.user_data['vin'], context.user_data['plate'], context.user_data['pcountry'],
+             context.user_data['brand'], context.user_data['model'], context.user_data['year'],
+             context.user_data['client_name'], phone)
+        )
+        conn.commit()
         await update.message.reply_text(
             f"✅ Автомобиль добавлен!\n🚗 {context.user_data['brand']} {context.user_data['model']}\n📌 {context.user_data['vin']}",
             reply_markup=admin_kb
         )
-    else:
-        await update.message.reply_text("❌ Ошибка при сохранении. Попробуйте позже.", reply_markup=admin_kb)
-
-    context.user_data.clear()
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text("❌ Ошибка при сохранении.", reply_markup=admin_kb)
+    finally:
+        cur.close()
+        conn.close()
+        context.user_data.clear()
     return ConversationHandler.END
 
 # ===================== ДОБАВЛЕНИЕ ОБСЛУЖИВАНИЯ =====================
@@ -350,22 +351,26 @@ async def svc_details(update, context):
             elif k == 'рекомендации':
                 fields['notes'] = v
 
-    data = {
-        "car_id": context.user_data['car_id'],
-        "date": context.user_data['svc_date'],
-        "mileage": context.user_data['svc_mileage'],
-        "other_work": fields.get('work', ''),
-        "total_amount": fields.get('sum', 0),
-        "master": fields.get('master', ''),
-        "notes": fields.get('notes', '')
-    }
-    db_post("services", data)
-
-    await update.message.reply_text(
-        f"✅ Обслуживание добавлено!\n🚗 {context.user_data['car_info']}\n📅 {context.user_data['svc_date']}",
-        reply_markup=admin_kb
-    )
-    context.user_data.clear()
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO services (car_id, date, mileage, other_work, total_amount, master, notes) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (context.user_data['car_id'], context.user_data['svc_date'], context.user_data['svc_mileage'],
+             fields.get('work', ''), fields.get('sum', 0), fields.get('master', ''), fields.get('notes', ''))
+        )
+        conn.commit()
+        await update.message.reply_text(
+            f"✅ Обслуживание добавлено!\n🚗 {context.user_data['car_info']}\n📅 {context.user_data['svc_date']}",
+            reply_markup=admin_kb
+        )
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text("❌ Ошибка при сохранении.", reply_markup=admin_kb)
+    finally:
+        cur.close()
+        conn.close()
+        context.user_data.clear()
     return ConversationHandler.END
 
 # ===================== УДАЛЕНИЕ АВТО =====================
@@ -396,11 +401,20 @@ async def del_confirm(update, context):
         await update.message.reply_text("❌ Не найден.")
         return DEL_CAR
 
-    db_delete("services", {"car_id": f"eq.{cid}"})
-    db_delete("cars", {"id": f"eq.{cid}"})
-
-    await update.message.reply_text(f"✅ Удалён: {car['brand']} {car['model']}", reply_markup=admin_kb)
-    context.user_data.clear()
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM services WHERE car_id=%s", (cid,))
+        cur.execute("DELETE FROM cars WHERE id=%s", (cid,))
+        conn.commit()
+        await update.message.reply_text(f"✅ Удалён: {car['brand']} {car['model']}", reply_markup=admin_kb)
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text("❌ Ошибка при удалении.", reply_markup=admin_kb)
+    finally:
+        cur.close()
+        conn.close()
+        context.user_data.clear()
     return ConversationHandler.END
 
 # ===================== ОТМЕНА =====================
@@ -409,6 +423,18 @@ async def cancel(update, context):
     kb = admin_kb if is_admin(update.effective_user.id) else main_kb
     await update.message.reply_text("❌ Отменено.", reply_markup=kb)
     return ConversationHandler.END
+
+# ===================== Flask для порта =====================
+from flask import Flask
+
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def home():
+    return "OK"
+
+def run_flask():
+    flask_app.run(host='0.0.0.0', port=10000, debug=False, use_reloader=False)
 
 # ===================== ЗАПУСК =====================
 def main():
@@ -421,6 +447,9 @@ def main():
         sys.exit(0)
     with open(lock_file, "w") as f:
         f.write(str(os.getpid()))
+
+    # Запускаем Flask в отдельном потоке
+    threading.Thread(target=run_flask, daemon=True).start()
 
     app = Application.builder().token(TOKEN).build()
 
