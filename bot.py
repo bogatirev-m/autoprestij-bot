@@ -1,74 +1,51 @@
 import re
+import sqlite3
 import threading
-import psycopg2
-import psycopg2.extras
 from datetime import datetime
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
-# ===================== НАСТРОЙКИ =====================
 TOKEN = "8972845479:AAGmuKASCvt2ynCBOCTGswIWTXDurxuNNEE"
 ADMIN_IDS = [8621244180,740869889,8983954588]
-DATABASE_URL = "postgresql://postgres.vguziihdwdpkxngpwqrs:[Sukasuka0003]@aws-0-eu-north-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
+DB_FILE = "autoservice.db"
 
 # ===================== БАЗА ДАННЫХ =====================
 def get_conn():
-    return psycopg2.connect(DATABASE_URL)
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-def find_car(q):
-    q = re.sub(r'\s+', '', q.upper())
+def init_db():
     conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute("SELECT * FROM cars WHERE UPPER(REPLACE(vin,' ',''))=%s OR UPPER(REPLACE(plate,' ',''))=%s", (q,q))
-    row = cur.fetchone()
-    cur.close()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS cars (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vin TEXT UNIQUE,
+            plate TEXT UNIQUE,
+            plate_country TEXT DEFAULT 'РФ',
+            brand TEXT DEFAULT '',
+            model TEXT DEFAULT '',
+            year INTEGER DEFAULT 0,
+            client_name TEXT DEFAULT '',
+            client_phone TEXT DEFAULT '',
+            added_date TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE TABLE IF NOT EXISTS services (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            car_id INTEGER NOT NULL REFERENCES cars(id) ON DELETE CASCADE,
+            date TEXT NOT NULL,
+            mileage INTEGER NOT NULL,
+            other_work TEXT DEFAULT '',
+            total_amount REAL DEFAULT 0,
+            master TEXT DEFAULT '',
+            notes TEXT DEFAULT ''
+        );
+    """)
+    conn.commit()
     conn.close()
-    return dict(row) if row else None
 
-def car_services(cid):
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute("SELECT * FROM services WHERE car_id=%s ORDER BY date DESC", (cid,))
-    rows = [dict(r) for r in cur.fetchall()]
-    cur.close()
-    conn.close()
-    return rows
-
-def all_cars():
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute("SELECT * FROM cars ORDER BY id DESC LIMIT 20")
-    rows = [dict(r) for r in cur.fetchall()]
-    cur.close()
-    conn.close()
-    return rows
-
-def car_by_id(cid):
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute("SELECT * FROM cars WHERE id=%s", (cid,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return dict(row) if row else None
-
-def fmt_services(rows):
-    if not rows:
-        return "📭 История обслуживания пуста"
-    res = ""
-    for s in rows:
-        res += f"📅 <b>{s['date']}</b> | Пробег: <b>{s['mileage']:,}</b> км\n".replace(',', ' ')
-        if s.get('other_work'):
-            res += f"🔧 <b>Работы:</b> {s['other_work']}\n"
-        if s.get('master'):
-            res += f"👨‍🔧 Мастер: <b>{s['master']}</b>\n"
-        if s.get('total_amount'):
-            res += f"💰 Сумма: <b>{s['total_amount']}</b> ₽\n"
-        if s.get('notes'):
-            res += f"📝 <i>Рекомендации: {s['notes']}</i>\n"
-        res += "─" * 25 + "\n"
-    return res
+init_db()
 
 # ===================== КЛАВИАТУРЫ =====================
 main_kb = ReplyKeyboardMarkup([
@@ -80,6 +57,7 @@ admin_kb = ReplyKeyboardMarkup([
     ["➕ Добавить автомобиль", "🔧 Добавить обслуживание"],
     ["📋 Все автомобили", "🔍 Найти авто"],
     ["🗑 Удалить автомобиль"],
+    ["💾 Экспорт базы"],
     ["❌ Выйти из админки"]
 ], resize_keyboard=True)
 
@@ -90,19 +68,60 @@ cancel_kb = ReplyKeyboardMarkup([["❌ Отмена"]], resize_keyboard=True)
  CAR_NAME, CAR_PHONE, SVC_SELECT, SVC_DATE, SVC_MILEAGE, SVC_DETAILS,
  DEL_CAR) = range(13)
 
-# ===================== ВСПОМОГАТЕЛЬНЫЕ =====================
-def is_admin(uid):
-    return uid in ADMIN_IDS
+# ===================== ФУНКЦИИ =====================
+def is_admin(uid): return uid in ADMIN_IDS
 
 def plate_country(p):
     p = re.sub(r'\s+', '', p.upper())
-    if re.match(r'^[АВЕКМНОРСТУХ]\d{3}[АВЕКМНОРСТУХ]{2}\d{2,3}$', p):
-        return "РФ"
-    if re.match(r'^\d{2}KG\d{3}[A-Z]{3}$', p):
-        return "Киргизия"
-    if re.match(r'^\d{2}[A-Z]{2}\d{3}$', p):
-        return "Армения"
+    if re.match(r'^[АВЕКМНОРСТУХ]\d{3}[АВЕКМНОРСТУХ]{2}\d{2,3}$', p): return "РФ"
+    if re.match(r'^\d{2}KG\d{3}[A-Z]{3}$', p): return "Киргизия"
+    if re.match(r'^\d{2}[A-Z]{2}\d{3}$', p): return "Армения"
     return "РФ"
+
+def find_car(q):
+    q = re.sub(r'\s+', '', q.upper())
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM cars WHERE UPPER(REPLACE(vin,' ',''))=? OR UPPER(REPLACE(plate,' ',''))=?", (q,q))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def car_services(cid):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM services WHERE car_id=? ORDER BY date DESC", (cid,))
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def all_cars():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM cars ORDER BY id DESC LIMIT 20")
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def car_by_id(cid):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM cars WHERE id=?", (cid,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def fmt_services(rows):
+    if not rows: return "📭 История обслуживания пуста"
+    res = ""
+    for s in rows:
+        res += f"📅 <b>{s['date']}</b> | Пробег: <b>{s['mileage']:,}</b> км\n".replace(',',' ')
+        if s['other_work']: res += f"🔧 <b>Работы:</b> {s['other_work']}\n"
+        if s['master']: res += f"👨‍🔧 Мастер: <b>{s['master']}</b>\n"
+        if s['total_amount']: res += f"💰 Сумма: <b>{s['total_amount']}</b> ₽\n"
+        if s['notes']: res += f"📝 <i>Рекомендации: {s['notes']}</i>\n"
+        res += "─" * 25 + "\n"
+    return res
 
 # ===================== СТАРТ =====================
 async def start(update, context):
@@ -143,6 +162,18 @@ async def menu_exit(update, context):
     context.user_data.clear()
     await update.message.reply_text("Вышли из админки.", reply_markup=main_kb)
 
+# ===================== ЭКСПОРТ БАЗЫ =====================
+async def export_db(update, context):
+    context.user_data.clear()
+    if not is_admin(update.effective_user.id):
+        return
+    # Отправляем файл базы, если он существует
+    import os
+    if os.path.exists(DB_FILE):
+        await update.message.reply_document(document=open(DB_FILE, 'rb'), filename="autoservice.db")
+    else:
+        await update.message.reply_text("❌ Файл базы не найден.")
+
 # ===================== ЗАПРОС ИСТОРИИ =====================
 async def query_start(update, context):
     context.user_data.clear()
@@ -150,8 +181,7 @@ async def query_start(update, context):
     return QUERY
 
 async def query_process(update, context):
-    if update.message.text == "❌ Отмена":
-        return await cancel(update, context)
+    if update.message.text == "❌ Отмена": return await cancel(update, context)
     car = find_car(update.message.text.strip())
     if not car:
         await update.message.reply_text("❌ Не найдено.", reply_markup=cancel_kb)
@@ -165,14 +195,12 @@ async def query_process(update, context):
 # ===================== ДОБАВЛЕНИЕ АВТО =====================
 async def car_start(update, context):
     context.user_data.clear()
-    if not is_admin(update.effective_user.id):
-        return ConversationHandler.END
+    if not is_admin(update.effective_user.id): return ConversationHandler.END
     await update.message.reply_text("VIN (17 символов):", reply_markup=cancel_kb)
     return CAR_VIN
 
 async def car_vin(update, context):
-    if update.message.text == "❌ Отмена":
-        return await cancel(update, context)
+    if update.message.text == "❌ Отмена": return await cancel(update, context)
     vin = re.sub(r'\s+', '', update.message.text.strip().upper())
     if len(vin) != 17:
         await update.message.reply_text("❌ Ровно 17 символов:")
@@ -182,8 +210,7 @@ async def car_vin(update, context):
     return CAR_PLATE
 
 async def car_plate(update, context):
-    if update.message.text == "❌ Отмена":
-        return await cancel(update, context)
+    if update.message.text == "❌ Отмена": return await cancel(update, context)
     p = update.message.text.strip().upper()
     if not p:
         await update.message.reply_text("❌ Введите номер:")
@@ -194,26 +221,22 @@ async def car_plate(update, context):
     return CAR_BRAND
 
 async def car_brand(update, context):
-    if update.message.text == "❌ Отмена":
-        return await cancel(update, context)
+    if update.message.text == "❌ Отмена": return await cancel(update, context)
     context.user_data['brand'] = update.message.text.strip()
     await update.message.reply_text("Модель:")
     return CAR_MODEL
 
 async def car_model(update, context):
-    if update.message.text == "❌ Отмена":
-        return await cancel(update, context)
+    if update.message.text == "❌ Отмена": return await cancel(update, context)
     context.user_data['model'] = update.message.text.strip()
     await update.message.reply_text("Год выпуска:")
     return CAR_YEAR
 
 async def car_year(update, context):
-    if update.message.text == "❌ Отмена":
-        return await cancel(update, context)
+    if update.message.text == "❌ Отмена": return await cancel(update, context)
     try:
         y = int(update.message.text.strip())
-        if y < 1900 or y > 2100:
-            raise ValueError
+        if y < 1900 or y > 2100: raise ValueError
     except ValueError:
         await update.message.reply_text("❌ Год от 1900 до 2100:")
         return CAR_YEAR
@@ -222,32 +245,27 @@ async def car_year(update, context):
     return CAR_NAME
 
 async def car_name(update, context):
-    if update.message.text == "❌ Отмена":
-        return await cancel(update, context)
+    if update.message.text == "❌ Отмена": return await cancel(update, context)
     context.user_data['client_name'] = update.message.text.strip() or "—"
     await update.message.reply_text("Телефон:")
     return CAR_PHONE
 
 async def car_phone(update, context):
-    if update.message.text == "❌ Отмена":
-        return await cancel(update, context)
+    if update.message.text == "❌ Отмена": return await cancel(update, context)
     phone = update.message.text.strip() or "—"
 
-    # Проверка дубликата и вставка через psycopg2
     conn = get_conn()
     cur = conn.cursor()
     try:
-        cur.execute(
-            "SELECT id FROM cars WHERE vin=%s OR plate=%s",
-            (context.user_data['vin'], context.user_data['plate'])
-        )
+        # Проверка дубликата
+        cur.execute("SELECT id FROM cars WHERE vin=? OR plate=?", (context.user_data['vin'], context.user_data['plate']))
         if cur.fetchone():
             await update.message.reply_text("❌ Такой VIN или номер уже существует.", reply_markup=admin_kb)
             context.user_data.clear()
             return ConversationHandler.END
 
         cur.execute(
-            "INSERT INTO cars (vin, plate, plate_country, brand, model, year, client_name, client_phone) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            "INSERT INTO cars (vin, plate, plate_country, brand, model, year, client_name, client_phone) VALUES (?,?,?,?,?,?,?,?)",
             (context.user_data['vin'], context.user_data['plate'], context.user_data['pcountry'],
              context.user_data['brand'], context.user_data['model'], context.user_data['year'],
              context.user_data['client_name'], phone)
@@ -257,8 +275,9 @@ async def car_phone(update, context):
             f"✅ Автомобиль добавлен!\n🚗 {context.user_data['brand']} {context.user_data['model']}\n📌 {context.user_data['vin']}",
             reply_markup=admin_kb
         )
+    except sqlite3.IntegrityError:
+        await update.message.reply_text("❌ Такой VIN или номер уже существует.", reply_markup=admin_kb)
     except Exception as e:
-        conn.rollback()
         await update.message.reply_text("❌ Ошибка при сохранении.", reply_markup=admin_kb)
     finally:
         cur.close()
@@ -269,8 +288,7 @@ async def car_phone(update, context):
 # ===================== ДОБАВЛЕНИЕ ОБСЛУЖИВАНИЯ =====================
 async def svc_start(update, context):
     context.user_data.clear()
-    if not is_admin(update.effective_user.id):
-        return ConversationHandler.END
+    if not is_admin(update.effective_user.id): return ConversationHandler.END
     cars = all_cars()
     if not cars:
         await update.message.reply_text("❌ Нет автомобилей.", reply_markup=admin_kb)
@@ -282,8 +300,7 @@ async def svc_start(update, context):
     return SVC_SELECT
 
 async def svc_select(update, context):
-    if update.message.text == "❌ Отмена":
-        return await cancel(update, context)
+    if update.message.text == "❌ Отмена": return await cancel(update, context)
     try:
         cid = int(update.message.text.strip())
     except ValueError:
@@ -299,8 +316,7 @@ async def svc_select(update, context):
     return SVC_DATE
 
 async def svc_date(update, context):
-    if update.message.text == "❌ Отмена":
-        return await cancel(update, context)
+    if update.message.text == "❌ Отмена": return await cancel(update, context)
     raw = update.message.text.strip()
     for fmt in ["%d.%m.%Y", "%Y-%m-%d"]:
         try:
@@ -314,8 +330,7 @@ async def svc_date(update, context):
     return SVC_DATE
 
 async def svc_mileage(update, context):
-    if update.message.text == "❌ Отмена":
-        return await cancel(update, context)
+    if update.message.text == "❌ Отмена": return await cancel(update, context)
     try:
         m = int(update.message.text.strip().replace(" ", ""))
     except ValueError:
@@ -332,32 +347,26 @@ async def svc_mileage(update, context):
     return SVC_DETAILS
 
 async def svc_details(update, context):
-    if update.message.text == "❌ Отмена":
-        return await cancel(update, context)
+    if update.message.text == "❌ Отмена": return await cancel(update, context)
     fields = {}
     for line in update.message.text.strip().split('\n'):
         if '=' in line:
             k, v = line.split('=', 1)
             k, v = k.strip().lower(), v.strip()
-            if k in ('работы',):
-                fields['work'] = v
-            elif k == 'мастер':
-                fields['master'] = v
+            if k in ('работы',): fields['work'] = v
+            elif k == 'мастер': fields['master'] = v
             elif k == 'сумма':
-                try:
-                    fields['sum'] = float(v)
-                except:
-                    pass
-            elif k == 'рекомендации':
-                fields['notes'] = v
+                try: fields['sum'] = float(v)
+                except: pass
+            elif k == 'рекомендации': fields['notes'] = v
 
     conn = get_conn()
     cur = conn.cursor()
     try:
         cur.execute(
-            "INSERT INTO services (car_id, date, mileage, other_work, total_amount, master, notes) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            "INSERT INTO services (car_id, date, mileage, other_work, total_amount, master, notes) VALUES (?,?,?,?,?,?,?)",
             (context.user_data['car_id'], context.user_data['svc_date'], context.user_data['svc_mileage'],
-             fields.get('work', ''), fields.get('sum', 0), fields.get('master', ''), fields.get('notes', ''))
+             fields.get('work',''), fields.get('sum',0), fields.get('master',''), fields.get('notes',''))
         )
         conn.commit()
         await update.message.reply_text(
@@ -376,8 +385,7 @@ async def svc_details(update, context):
 # ===================== УДАЛЕНИЕ АВТО =====================
 async def del_start(update, context):
     context.user_data.clear()
-    if not is_admin(update.effective_user.id):
-        return ConversationHandler.END
+    if not is_admin(update.effective_user.id): return ConversationHandler.END
     cars = all_cars()
     if not cars:
         await update.message.reply_text("📭 База пуста.", reply_markup=admin_kb)
@@ -389,8 +397,7 @@ async def del_start(update, context):
     return DEL_CAR
 
 async def del_confirm(update, context):
-    if update.message.text == "❌ Отмена":
-        return await cancel(update, context)
+    if update.message.text == "❌ Отмена": return await cancel(update, context)
     try:
         cid = int(update.message.text.strip())
     except ValueError:
@@ -404,8 +411,8 @@ async def del_confirm(update, context):
     conn = get_conn()
     cur = conn.cursor()
     try:
-        cur.execute("DELETE FROM services WHERE car_id=%s", (cid,))
-        cur.execute("DELETE FROM cars WHERE id=%s", (cid,))
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.execute("DELETE FROM cars WHERE id=?", (cid,))
         conn.commit()
         await update.message.reply_text(f"✅ Удалён: {car['brand']} {car['model']}", reply_markup=admin_kb)
     except Exception as e:
@@ -448,7 +455,6 @@ def main():
     with open(lock_file, "w") as f:
         f.write(str(os.getpid()))
 
-    # Запускаем Flask в отдельном потоке
     threading.Thread(target=run_flask, daemon=True).start()
 
     app = Application.builder().token(TOKEN).build()
@@ -495,6 +501,7 @@ def main():
     ))
 
     app.add_handler(MessageHandler(filters.Regex("^📋 Все автомобили$"), menu_cars))
+    app.add_handler(MessageHandler(filters.Regex("^💾 Экспорт базы$"), export_db))
     app.add_handler(MessageHandler(filters.Regex("^ℹ️ О сервисе$"), menu_about))
     app.add_handler(MessageHandler(filters.Regex("^📞 Контакты$"), menu_contacts))
     app.add_handler(MessageHandler(filters.Regex("^❌ Выйти из админки$"), menu_exit))
