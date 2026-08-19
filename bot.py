@@ -6,7 +6,7 @@ from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
-TOKEN = "8972845479:AAGmuKASCvt2ynCBOCTGswIWTXDurxuNNEE"
+TOKEN = "8972845479:AAG1uNAYo2758bLHUm--wItuzTLKvfKPpFk"
 ADMIN_IDS = [8621244180,740869889,8983954588]
 DB_FILE = "autoservice.db"
 
