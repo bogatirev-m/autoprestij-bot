@@ -1,13 +1,13 @@
 import re
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
-TOKEN = "8972845479:AAG1uNAYo2758bLHUm--wItuzTLKvfKPpFk"
-ADMIN_IDS = [8621244180,740869889,8983954588]
+TOKEN = "8972845479:AAH1ui-YcB1-WTaC-EIjMjYZ7fgjCBHNT84"
+ADMIN_IDS = [8621244180, 740869889, 8983954588]
 DB_FILE = "autoservice.db"
 
 # ===================== БАЗА ДАННЫХ =====================
@@ -40,6 +40,13 @@ def init_db():
             total_amount REAL DEFAULT 0,
             master TEXT DEFAULT '',
             notes TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS reminders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            car_info TEXT DEFAULT '',
+            work TEXT DEFAULT '',
+            remind_at TEXT NOT NULL,
+            sent INTEGER DEFAULT 0
         );
     """)
     conn.commit()
@@ -123,6 +130,57 @@ def fmt_services(rows):
         res += "─" * 25 + "\n"
     return res
 
+def format_remind_time(days: float) -> str:
+    """Красивый вывод времени напоминания"""
+    if days >= 1:
+        if days == int(days):
+            return f"{int(days)} дн."
+        return f"{days} дн."
+    total_min = int(days * 24 * 60)
+    if total_min < 60:
+        return f"{total_min} мин."
+    h = total_min // 60
+    m = total_min % 60
+    if m:
+        return f"{h} ч {m} мин."
+    return f"{h} ч."
+
+# ===================== ВОРКЕР НАПОМИНАНИЙ =====================
+def reminder_worker():
+    import time
+    import httpx
+    while True:
+        try:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM reminders WHERE sent=0 AND remind_at <= ?", (now,))
+            rows = cur.fetchall()
+            for r in rows:
+                r = dict(r)
+                text = (
+                    f"🔔 <b>Напоминание: позвонить клиенту</b>\n\n"
+                    f"🚗 {r['car_info']}\n"
+                    f"🔧 Что делали: {r['work'] or '—'}\n\n"
+                    f"Позвоните и спросите, всё ли в порядке."
+                )
+                for admin_id in ADMIN_IDS:
+                    try:
+                        httpx.post(
+                            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+                            json={"chat_id": admin_id, "text": text, "parse_mode": "HTML"},
+                            timeout=10
+                        )
+                    except Exception as e:
+                        print(f"Reminder send error: {e}")
+                cur.execute("UPDATE reminders SET sent=1 WHERE id=?", (r['id'],))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"Reminder worker error: {e}")
+        time.sleep(30)
+
 # ===================== СТАРТ =====================
 async def start(update, context):
     context.user_data.clear()
@@ -167,7 +225,6 @@ async def export_db(update, context):
     context.user_data.clear()
     if not is_admin(update.effective_user.id):
         return
-    # Отправляем файл базы, если он существует
     import os
     if os.path.exists(DB_FILE):
         await update.message.reply_document(document=open(DB_FILE, 'rb'), filename="autoservice.db")
@@ -257,7 +314,6 @@ async def car_phone(update, context):
     conn = get_conn()
     cur = conn.cursor()
     try:
-        # Проверка дубликата
         cur.execute("SELECT id FROM cars WHERE vin=? OR plate=?", (context.user_data['vin'], context.user_data['plate']))
         if cur.fetchone():
             await update.message.reply_text("❌ Такой VIN или номер уже существует.", reply_markup=admin_kb)
@@ -342,7 +398,9 @@ async def svc_mileage(update, context):
         "работы=Замена масла, фильтры\n"
         "мастер=Иванов\n"
         "сумма=5000\n"
-        "рекомендации=Проверить тормоза"
+        "рекомендации=Проверить тормоза\n"
+        "напомнить=15\n\n"
+        "напомнить — через сколько дней напомнить (дробные можно, например 0.001 ≈ 1.5 мин). 0 или не указывать — без напоминания."
     )
     return SVC_DETAILS
 
@@ -359,6 +417,9 @@ async def svc_details(update, context):
                 try: fields['sum'] = float(v)
                 except: pass
             elif k == 'рекомендации': fields['notes'] = v
+            elif k == 'напомнить':
+                try: fields['remind'] = float(v.replace(',', '.'))
+                except: pass
 
     conn = get_conn()
     cur = conn.cursor()
@@ -368,9 +429,21 @@ async def svc_details(update, context):
             (context.user_data['car_id'], context.user_data['svc_date'], context.user_data['svc_mileage'],
              fields.get('work',''), fields.get('sum',0), fields.get('master',''), fields.get('notes',''))
         )
+
+        remind_days = fields.get('remind', 0)
+        remind_text = ""
+        if remind_days and remind_days > 0:
+            remind_dt = datetime.now() + timedelta(days=remind_days)
+            cur.execute(
+                "INSERT INTO reminders (car_info, work, remind_at, sent) VALUES (?,?,?,0)",
+                (context.user_data['car_info'], fields.get('work',''),
+                 remind_dt.strftime("%Y-%m-%d %H:%M:%S"))
+            )
+            remind_text = f"\n⏰ Напоминание через {format_remind_time(remind_days)}"
+
         conn.commit()
         await update.message.reply_text(
-            f"✅ Обслуживание добавлено!\n🚗 {context.user_data['car_info']}\n📅 {context.user_data['svc_date']}",
+            f"✅ Обслуживание добавлено!\n🚗 {context.user_data['car_info']}\n📅 {context.user_data['svc_date']}{remind_text}",
             reply_markup=admin_kb
         )
     except Exception as e:
@@ -456,6 +529,7 @@ def main():
         f.write(str(os.getpid()))
 
     threading.Thread(target=run_flask, daemon=True).start()
+    threading.Thread(target=reminder_worker, daemon=True).start()
 
     app = Application.builder().token(TOKEN).build()
 
