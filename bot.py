@@ -131,18 +131,14 @@ def fmt_services(rows):
     return res
 
 def format_remind_time(days: float) -> str:
-    """Красивый вывод времени напоминания"""
     if days >= 1:
-        if days == int(days):
-            return f"{int(days)} дн."
+        if days == int(days): return f"{int(days)} дн."
         return f"{days} дн."
     total_min = int(days * 24 * 60)
-    if total_min < 60:
-        return f"{total_min} мин."
+    if total_min < 60: return f"{total_min} мин."
     h = total_min // 60
     m = total_min % 60
-    if m:
-        return f"{h} ч {m} мин."
+    if m: return f"{h} ч {m} мин."
     return f"{h} ч."
 
 # ===================== ВОРКЕР НАПОМИНАНИЙ =====================
@@ -223,8 +219,7 @@ async def menu_exit(update, context):
 # ===================== ЭКСПОРТ БАЗЫ =====================
 async def export_db(update, context):
     context.user_data.clear()
-    if not is_admin(update.effective_user.id):
-        return
+    if not is_admin(update.effective_user.id): return
     import os
     if os.path.exists(DB_FILE):
         await update.message.reply_document(document=open(DB_FILE, 'rb'), filename="autoservice.db")
@@ -358,13 +353,13 @@ async def svc_start(update, context):
 async def svc_select(update, context):
     if update.message.text == "❌ Отмена": return await cancel(update, context)
     try:
-        cid = int(update.message.text.strip())
+        cid = int(update.message.text.strip().replace(" ", ""))
     except ValueError:
-        await update.message.reply_text("❌ Введите число:")
+        await update.message.reply_text("❌ Введите число (ID авто):")
         return SVC_SELECT
     car = car_by_id(cid)
     if not car:
-        await update.message.reply_text("❌ Не найден.")
+        await update.message.reply_text("❌ Автомобиль с таким ID не найден.")
         return SVC_SELECT
     context.user_data['car_id'] = cid
     context.user_data['car_info'] = f"{car['brand']} {car['model']} ({car['plate']})"
@@ -390,7 +385,7 @@ async def svc_mileage(update, context):
     try:
         m = int(update.message.text.strip().replace(" ", ""))
     except ValueError:
-        await update.message.reply_text("❌ Введите число:")
+        await update.message.reply_text("❌ Введите число (пробег):")
         return SVC_MILEAGE
     context.user_data['svc_mileage'] = m
     await update.message.reply_text(
@@ -472,13 +467,13 @@ async def del_start(update, context):
 async def del_confirm(update, context):
     if update.message.text == "❌ Отмена": return await cancel(update, context)
     try:
-        cid = int(update.message.text.strip())
+        cid = int(update.message.text.strip().replace(" ", ""))
     except ValueError:
-        await update.message.reply_text("❌ Введите число:")
+        await update.message.reply_text("❌ Введите число (ID авто):")
         return DEL_CAR
     car = car_by_id(cid)
     if not car:
-        await update.message.reply_text("❌ Не найден.")
+        await update.message.reply_text("❌ Автомобиль с таким ID не найден.")
         return DEL_CAR
 
     conn = get_conn()
@@ -536,13 +531,22 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_cmd))
 
+    # --- ЗАПРОС ИСТОРИИ ---
     app.add_handler(ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🔍 Найти авто$"), query_start),
                       MessageHandler(filters.Regex("^🔍 Запросить историю$"), query_start)],
         states={QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, query_process)]},
-        fallbacks=[MessageHandler(filters.Regex("^❌ Отмена$"), cancel)]
+        fallbacks=[
+            MessageHandler(filters.Regex("^❌ Отмена$"), cancel),
+            MessageHandler(filters.Regex("^➕ Добавить автомобиль$"), car_start),
+            MessageHandler(filters.Regex("^🔧 Добавить обслуживание$"), svc_start),
+            MessageHandler(filters.Regex("^📋 Все автомобили$"), menu_cars),
+            MessageHandler(filters.Regex("^🗑 Удалить автомобиль$"), del_start),
+        ],
+        allow_reentry=True
     ))
 
+    # --- ДОБАВЛЕНИЕ АВТО ---
     app.add_handler(ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^➕ Добавить автомобиль$"), car_start)],
         states={
@@ -554,9 +558,15 @@ def main():
             CAR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, car_name)],
             CAR_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, car_phone)]
         },
-        fallbacks=[MessageHandler(filters.Regex("^❌ Отмена$"), cancel)]
+        fallbacks=[
+            MessageHandler(filters.Regex("^❌ Отмена$"), cancel),
+            MessageHandler(filters.Regex("^🔧 Добавить обслуживание$"), svc_start),
+            MessageHandler(filters.Regex("^📋 Все автомобили$"), menu_cars),
+        ],
+        allow_reentry=True
     ))
 
+    # --- ДОБАВЛЕНИЕ ОБСЛУЖИВАНИЯ ---
     app.add_handler(ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🔧 Добавить обслуживание$"), svc_start)],
         states={
@@ -565,13 +575,25 @@ def main():
             SVC_MILEAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, svc_mileage)],
             SVC_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, svc_details)]
         },
-        fallbacks=[MessageHandler(filters.Regex("^❌ Отмена$"), cancel)]
+        fallbacks=[
+            MessageHandler(filters.Regex("^❌ Отмена$"), cancel),
+            MessageHandler(filters.Regex("^➕ Добавить автомобиль$"), car_start),
+            MessageHandler(filters.Regex("^📋 Все автомобили$"), menu_cars),
+        ],
+        allow_reentry=True
     ))
 
+    # --- УДАЛЕНИЕ АВТО ---
     app.add_handler(ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🗑 Удалить автомобиль$"), del_start)],
         states={DEL_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, del_confirm)]},
-        fallbacks=[MessageHandler(filters.Regex("^❌ Отмена$"), cancel)]
+        fallbacks=[
+            MessageHandler(filters.Regex("^❌ Отмена$"), cancel),
+            MessageHandler(filters.Regex("^➕ Добавить автомобиль$"), car_start),
+            MessageHandler(filters.Regex("^🔧 Добавить обслуживание$"), svc_start),
+            MessageHandler(filters.Regex("^📋 Все автомобили$"), menu_cars),
+        ],
+        allow_reentry=True
     ))
 
     app.add_handler(MessageHandler(filters.Regex("^📋 Все автомобили$"), menu_cars))
