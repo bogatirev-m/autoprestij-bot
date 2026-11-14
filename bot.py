@@ -222,8 +222,8 @@ async def menu_contacts(update, context):
     kb = admin_kb if is_admin(update.effective_user.id) else main_kb
     await update.message.reply_text(
         "📞 <b>Телефон:</b> +7 (922) 679-08-27\n"
-        "📍 <b>Адрес:</b> г. Москва, ул. Ленина, д. 10\n"
-        "🕐 <b>Режим работы:</b> Вт–Чт, Сб–Вс (Пятница — выходной)\n"
+        "📍 <b>Адрес:</b> г.Магадан Марчеканский переулок, 2Б\n"
+        "🕐 <b>Режим работы:</b> Пн–Чт, Сб–Вс (Пятница — выходной)\n"
         "💬 <b>WhatsApp:</b> <a href='https://wa.me/79226790827'>Написать в WhatsApp</a>",
         parse_mode="HTML",
         reply_markup=kb,
