@@ -182,7 +182,7 @@ def reminder_worker():
 async def start(update, context):
     context.user_data.clear()
     kb = admin_kb if is_admin(update.effective_user.id) else main_kb
-    await update.message.reply_text("👋 Добро пожаловать!", reply_markup=kb)
+    await update.message.reply_text("👋 Вас приветствует Автопрестиж, Автосервис и Мойка", reply_markup=kb)
 
 async def admin_cmd(update, context):
     context.user_data.clear()
