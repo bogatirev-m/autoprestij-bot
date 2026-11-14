@@ -167,8 +167,8 @@ async def menu_contacts(update, context):
     await update.message.reply_text(
         "📞 <b>Телефон:</b> +7 (922) 679-08-27\n"
         "📍 <b>Адрес:</b> г. Магадан, Марчеканский переулок, 2Б\n"
-        "🕐 <b>Режим работы:</b> Пн-Чт,Сб-Вс(Пт выходной)  с 10:00 до 20:00\n"
-        "💬 <b>WhatsApp:</b> https://wa.me/79226790827 ,
+        "🕐 <b>Режим работы:</b> Пн-Чт, Сб-Вс (Пт выходной) с 10:00 до 20:00\n"
+        "💬 <b>WhatsApp:</b> https://wa.me/79226790827",
         parse_mode="HTML",
         reply_markup=kb
     )
